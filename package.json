@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vp dev",
-    "build": "tsc --noEmit && vp build",
+    "build": "vp build",
     "watch": "vp build --watch",
     "preview": "vp preview",
     "fmt": "vp fmt",

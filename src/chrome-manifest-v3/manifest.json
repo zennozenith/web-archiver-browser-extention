@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "URL Archiver Client",
+  "version": "2.0.0",
+  "description": "Capture the current page (HTML, URL, headers, metadata) and send it to your own archive server.",
+  "minimum_chrome_version": "105",
+  "icons": { "16": "icon16.png", "32": "icon32.png", "48": "icon48.png", "128": "icon128.png" },
+  "permissions": ["activeTab", "tabs", "storage", "webRequest", "scripting"],
+  "host_permissions": ["<all_urls>"],
+  "optional_permissions": ["cookies"],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_icon": { "16": "icon16.png", "32": "icon32.png" },
+    "default_title": "Archive this page"
+  },
+  "options_ui": { "page": "options.html", "open_in_tab": true },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": { "default": "Alt+Shift+A" },
+      "description": "Archive this page"
+    }
+  }
+}

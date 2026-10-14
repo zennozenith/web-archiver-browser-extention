@@ -1,4 +1,5 @@
 "use strict";
+
 const DEFAULTS = {
   serverUrl: "",
   authMode: "none",
@@ -14,7 +15,7 @@ const DEFAULTS = {
   timeoutSec: 30,
 };
 const $ = (id) => document.getElementById(id);
-const status = (msg, cls = "") => {
+const write_status = (msg, cls = "") => {
   $("status").textContent = msg;
   $("status").className = cls;
 };
@@ -57,7 +58,7 @@ $("includeCookies").addEventListener("change", async (e) => {
     const granted = await browser.permissions.request({ permissions: ["cookies"] });
     if (!granted) {
       e.target.checked = false;
-      status("Cookie permission denied.", "err");
+      write_status("Cookie permission denied.", "err");
     }
   }
 });
@@ -68,31 +69,31 @@ $("save").addEventListener("click", async () => {
     try {
       new URL(s.serverUrl);
     } catch {
-      return status("Invalid server URL.", "err");
+      return write_status("Invalid server URL.", "err");
     }
   }
   await browser.storage.local.set(s);
-  status("Saved.", "ok");
+  write_status("Saved.", "ok");
 });
 
 $("test").addEventListener("click", async () => {
   const s = readForm();
-  if (!s.serverUrl) return status("Enter a server URL first.", "err");
+  if (!s.serverUrl) return write_status("Enter a server URL first.", "err");
   const headers = {};
   if (s.authToken) {
     if (s.authMode === "bearer") headers["Authorization"] = "Bearer " + s.authToken;
     else if (s.authMode === "custom" && s.authHeaderName) headers[s.authHeaderName] = s.authToken;
   }
-  status("Testing…");
+  write_status("Testing…");
   try {
     const res = await fetch(s.serverUrl, { method: "GET", headers });
     // Any HTTP response proves the server is reachable; 405 is common for POST-only endpoints.
     const note = res.status === 405 ? " (POST-only endpoint – reachable)" : "";
 
-    status(`Reached server: HTTP ${res.status}${note}`, res.status < 500 ? "ok" : "err");
+    write_status(`Reached server: HTTP ${res.status}${note}`, res.status < 500 ? "ok" : "err");
   } catch (e) {
-    status("Connection failed: " + e.message, "err");
+    write_status("Connection failed: " + e.message, "err");
   }
 });
 
-load();
+load().catch((e) => console.error(e));

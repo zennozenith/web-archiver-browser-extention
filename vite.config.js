@@ -26,13 +26,13 @@ export default {
     options: { typeAware: true, typeCheck: true },
   },
   root,
-  base: "/static/vite/",
+  // base: "/static/vite/",
   plugins: lazyPlugins(() => [tailwindcss()]),
   mode: "production",
   build: {
-    outDir: "../static/vite",
+    outDir: "build",
     emptyOutDir: true,
-    sourcemap: true,
+    // sourcemap: true,
     rolldownOptions: {
       input: Object.fromEntries(
         files.map((file) => [
@@ -45,11 +45,12 @@ export default {
         ]),
       ),
       output: {
-        // minify: false,
+        minify: false,
         // predictable filenames instead of hashed ones, so Askama
         // templates can reference /static/counter.js directly
         entryFileNames: "[name].js",
         assetFileNames: "[name].[ext]",
+        cleanDir: true,
 
         // entryFileNames: "[name].js",              // stable name, no hash
         // chunkFileNames: "chunks/[name]-[hash].js",
