@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8">
-    <title>URL Archiver – Settings</title>
+    <title>URL Archiver – Preferences</title>
     <style>
     :root {
       color-scheme: light dark;
@@ -66,10 +66,15 @@
     .err {
       color: #d33;
     }
+    code {
+      background: #8882;
+      padding: 0 0.25em;
+      border-radius: 3px;
+    }
     </style>
   </head>
   <body>
-    <h1>URL Archiver – Settings</h1>
+    <h1>URL Archiver – Preferences</h1>
 
     <h2>Server</h2>
     <label for="serverUrl">Archive endpoint URL</label>
@@ -86,6 +91,7 @@
       <option value="bearer">Bearer token (Authorization header)</option>
       <option value="custom">Custom header</option>
     </select>
+    <small>Used for both the archive endpoint and the pending list.</small>
     <div id="customName">
       <label for="authHeaderName">Header name</label>
       <input type="text" id="authHeaderName" placeholder="X-API-Key">
@@ -98,9 +104,31 @@
     <label for="timeoutSec">Request timeout (seconds)</label>
     <input type="number" id="timeoutSec" min="1" max="600">
 
+    <h2>Pending list</h2>
+    <label for="pendingUrl">Pending URLs endpoint</label>
+    <input
+      type="url"
+      id="pendingUrl"
+      placeholder="https://archive.example.com/api/pending"
+    >
+    <small>
+      A <code>GET</code> returning a JSON array of URL strings or objects
+      <code>{"id", "url", "title"}</code> (also accepts <code>{"items":
+        [...]}</code>). Leave empty to disable.
+    </small>
+
+    <label for="refreshMinutes">Refresh every (minutes)</label>
+    <input type="number" id="refreshMinutes" min="1" max="1440">
+
+    <label class="check"><input type="checkbox" id="showBadge"> Show pending
+      count on the toolbar icon</label>
+    <label class="check"><input type="checkbox" id="promptAfterOpen"> After
+      “Open &amp; archive”, show an “Archive this page?” prompt once the page
+      loads</label>
+
     <h2>What to capture</h2>
-    <label class="check"><input type="checkbox" id="includeHtml"> Page HTML
-      (rendered DOM)</label>
+    <!-- <label class="check"><input type="checkbox" id="includeHtml"> Page HTML
+      (rendered DOM)</label> -->
     <label class="check"><input type="checkbox" id="includeRequestHeaders">
       Request headers</label>
     <label class="check"><input type="checkbox" id="includeResponseHeaders">
@@ -121,8 +149,12 @@
 
     <p style="margin-top: 2rem">
       <button id="save">Save</button>
-      <button id="test" type="button">Test connection</button>
+      <button id="test" type="button">Test archive endpoint</button>
+      <button id="testPending" type="button">Test pending list</button>
     </p>
+    <small>Keyboard shortcut for quick archiving: Alt+Shift+A by default; change
+      it under <code>about:addons</code> → ⚙ → Manage Extension
+      Shortcuts.</small>
     <div id="status"></div>
     <script src="options.js"></script>
   </body>

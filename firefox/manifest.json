@@ -1,25 +1,26 @@
 {
   "manifest_version": 3,
   "name": "URL Archiver Client",
-  "version": "2.0.0",
-  "description": "Capture the current page (HTML, URL, headers, metadata) and send it to your own archive server.",
+  "version": "3.0.0",
+  "description": "Archive pages to your own server and work through a pending-URL list from a toolbar popup.",
   "browser_specific_settings": {
     "gecko": { "id": "url-archiver@example.local", "strict_min_version": "115.0" }
   },
   "icons": { "48": "icon.svg", "96": "icon.svg" },
-  "permissions": ["activeTab", "tabs", "storage", "webRequest", "scripting"],
+  "permissions": ["activeTab", "tabs", "storage", "webRequest", "scripting", "alarms"],
   "host_permissions": ["<all_urls>"],
   "optional_permissions": ["cookies"],
   "background": { "scripts": ["background.js"] },
   "action": {
     "default_icon": "icon.svg",
-    "default_title": "Archive this page"
+    "default_title": "URL Archiver",
+    "default_popup": "popup.html"
   },
   "options_ui": { "page": "options.html", "open_in_tab": true },
   "commands": {
-    "_execute_action": {
+    "archive-page": {
       "suggested_key": { "default": "Alt+Shift+A" },
-      "description": "Archive this page"
+      "description": "Archive the current page"
     }
   }
 }

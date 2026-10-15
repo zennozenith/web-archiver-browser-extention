@@ -1,5 +1,4 @@
 // Injected into the page on demand. The value of the last expression is returned.
-//
 (() => {
   const meta = {};
   document.querySelectorAll("meta").forEach((m) => {
@@ -14,19 +13,23 @@
   const dt = document.doctype;
   const doctype = dt
     ? `<!DOCTYPE ${dt.name}${dt.publicId ? ` PUBLIC "${dt.publicId}"` : ""}${
-        !dt.publicId && dt.systemId ? " SYSTEM" : ""
-      }${dt.systemId ? ` "${dt.systemId}"` : ""}>`
+      !dt.publicId && dt.systemId ? " SYSTEM" : ""
+    }${dt.systemId ? ` "${dt.systemId}"` : ""}>`
     : "";
+  // Serialize a clone so the extension's own prompt banner is excluded
+  const clone = document.documentElement.cloneNode(true);
+  const own = clone.querySelector("#__url_archiver_banner__");
+  if (own) own.remove();
+
   const sel = String(window.getSelection() || "");
-  const canonical = document.querySelector('link[rel="canonical"]');
+  const canonical = document.querySelector("link[rel=\"canonical\"]");
   const feeds = [
-    ...document.querySelectorAll(
-      'link[rel="alternate"][type*="rss"],link[rel="alternate"][type*="atom"]',
-    ),
-  ].map((l) => l.href);
-  const icons = [...document.querySelectorAll('link[rel~="icon"]')].map((l) => l.href);
+    ...document.querySelectorAll("link[rel=\"alternate\"][type*=\"rss\"],link[rel=\"alternate\"][type*=\"atom\"]"),
+  ]
+    .map((l) => l.href);
+  const icons = [...document.querySelectorAll("link[rel~=\"icon\"]")].map((l) => l.href);
   return {
-    html: doctype + "\n" + document.documentElement.outerHTML,
+    html: doctype + "\n" + clone.outerHTML,
     url: location.href,
     title: document.title,
     referrer: document.referrer,
