@@ -1,4 +1,5 @@
 (() => {
+  const api = globalThis.browser || globalThis.chrome;
   const ID = "__url_archiver_banner__";
   const old = document.getElementById(ID);
   if (old) old.remove();
@@ -11,9 +12,9 @@
   const style = document.createElement("style");
   style.textContent = `
     .box{font:14px system-ui,sans-serif;display:flex;gap:8px;align-items:center;
-      background:#1f2430;color:#fff;padding:10px 12px;border-radius:10px;
+      background:#1f2430;color:#fff;padding:10px 12px;border-radius:10px;max-width:420px;
       box-shadow:0 6px 24px rgba(0,0,0,.35);border:1px solid #ffffff22}
-    .msg{margin-right:4px}
+    .msg{margin-right:4px;overflow-wrap:anywhere}
     button{font:inherit;border:0;border-radius:6px;padding:6px 12px;cursor:pointer}
     .go{background:#4f6df5;color:#fff}.no{background:#ffffff1a;color:#fff}
     button:disabled{opacity:.5;cursor:default}`;
@@ -37,7 +38,7 @@
     go.disabled = no.disabled = true;
     msg.textContent = "Archiving…";
     try {
-      const r = await browser.runtime.sendMessage({ type: "archiveFromBanner" });
+      const r = await api.runtime.sendMessage({ type: "archiveFromBanner" });
       if (r && r.ok) {
         msg.textContent = "Archived ✓";
         go.style.display = no.style.display = "none";
@@ -53,7 +54,7 @@
   });
 
   no.addEventListener("click", () => {
-    browser.runtime.sendMessage({ type: "dismissBanner" });
+    api.runtime.sendMessage({ type: "dismissBanner" });
     host.remove();
   });
 })();

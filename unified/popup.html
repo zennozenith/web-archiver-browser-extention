@@ -8,6 +8,9 @@
     <header>
       <h1>URL Archiver</h1>
       <div class="actions">
+        <button id="recheck" class="icon" title="Re-check archive status">
+          ⟳
+        </button>
         <button id="refresh" class="icon" title="Refresh pending list">
           ↻
         </button>
@@ -20,6 +23,7 @@
         <div id="curTitle" class="title">…</div>
         <div id="curUrl" class="url"></div>
       </div>
+      <div id="archInfo" class="archinfo"></div>
       <button id="archiveNow" class="primary">Archive this page</button>
       <div id="curStatus" class="status"></div>
     </section>
@@ -32,6 +36,7 @@
       <div id="meta" class="meta"></div>
       <ul id="list"></ul>
     </section>
+    <script src="common.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

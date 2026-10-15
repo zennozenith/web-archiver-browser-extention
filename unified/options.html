@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>URL Archiver – Preferences</title>
+    <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { max-width: 640px; margin: 2rem auto; padding: 0 1rem; line-height: 1.4; }
+    h1 { font-size: 1.4rem; }
+    h2 { font-size: 1.05rem; margin-top: 2rem; border-bottom: 1px solid #8884; padding-bottom: 0.3rem; }
+    label { display: block; margin: 0.8rem 0 0.25rem; font-weight: 600; }
+    input[type="text"], input[type="url"], input[type="password"], input[type="number"], select {
+      width: 100%; box-sizing: border-box; padding: 0.5rem; font: inherit;
+    }
+    .check { display: flex; gap: 0.5rem; align-items: center; font-weight: normal; margin: 0.5rem 0; }
+    small { opacity: 0.7; display: block; margin-top: 0.2rem; }
+    button { font: inherit; padding: 0.5rem 1rem; margin: 0 0.5rem 0.5rem 0; cursor: pointer; }
+    #status { margin-top: 1rem; min-height: 1.4em; overflow-wrap: anywhere; }
+    .ok { color: #2e9e4f; }
+    .err { color: #d33; }
+    code { background: #8882; padding: 0 0.25em; border-radius: 3px; }
+    details { margin-top: 1rem; }
+    summary { cursor: pointer; font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <h1>URL Archiver – Preferences</h1>
+
+    <h2>Server</h2>
+    <label for="hostUrl">Archive server URL</label>
+    <input type="url" id="hostUrl" placeholder="https://archive.example.com/">
+    <small>
+      The archive, pending and status endpoints are derived from this, e.g.
+      <code>…/api/archive</code>, <code>…/api/pending</code>,
+      <code>…/api/status</code>.
+    </small>
+
+    <details>
+      <summary>Override individual endpoints</summary>
+      <small>Leave a field empty to use the derived URL (shown as placeholder).</small>
+
+      <label for="archiveUrl">Archive endpoint</label>
+      <input type="url" id="archiveUrl">
+      <small>Receives a <code>multipart/form-data</code> POST for every capture.</small>
+
+      <label for="pendingUrl">Pending URLs endpoint</label>
+      <input type="url" id="pendingUrl">
+      <small>
+        <code>GET</code> returning a JSON array of URL strings or objects
+        <code>{"id","url","title"}</code> (or <code>{"items":[…]}</code>).
+      </small>
+
+      <label for="statusUrl">Archive status endpoint</label>
+      <input type="url" id="statusUrl">
+      <small>
+        <code>GET …?url=&lt;page url&gt;</code> returning
+        <code>{"archived":true,"count":3,"versions":[{"id","archivedAt"}]}</code>;
+        HTTP 404 means "not archived".
+      </small>
+    </details>
+
+    <label for="authMode">Authentication</label>
+    <select id="authMode">
+      <option value="none">None</option>
+      <option value="bearer">Bearer token (Authorization header)</option>
+      <option value="custom">Custom header</option>
+    </select>
+    <small>Used for all endpoints.</small>
+    <div id="customName">
+      <label for="authHeaderName">Header name</label>
+      <input type="text" id="authHeaderName" placeholder="X-API-Key">
+    </div>
+    <div id="tokenRow">
+      <label for="authToken">Token / key</label>
+      <input type="password" id="authToken" autocomplete="off">
+    </div>
+
+    <label for="timeoutSec">Request timeout (seconds)</label>
+    <input type="number" id="timeoutSec" min="1" max="600">
+
+    <h2>Behaviour</h2>
+    <label class="check"><input type="checkbox" id="checkOnLoad"> When a page
+      finishes loading, check whether it is already archived (shown on the
+      toolbar icon)</label>
+
+    <label for="refreshMinutes">Refresh pending list every (minutes)</label>
+    <input type="number" id="refreshMinutes" min="1" max="1440">
+
+    <label class="check"><input type="checkbox" id="showBadge"> Show pending
+      count on the toolbar icon</label>
+    <label class="check"><input type="checkbox" id="promptAfterOpen"> After
+      “Open &amp; archive”, show an “Archive this page?” prompt once the page
+      loads</label>
+
+    <h2>What to capture</h2>
+    <small>The page HTML and screenshot are uploaded as files; everything else
+      is sent as JSON in the <code>metadata</code> part.</small>
+    <label class="check"><input type="checkbox" id="includeRequestHeaders">
+      Request headers</label>
+    <label class="check"><input type="checkbox" id="includeResponseHeaders">
+      Response headers</label>
+    <label class="check"><input type="checkbox" id="includeCookies"> Cookies for
+      the page <small>(asks for the “cookies” permission)</small></label>
+    <label class="check"><input type="checkbox" id="includeScreenshot">
+      Screenshot of the visible area (<code>screenshot.jpg</code>)</label>
+
+    <label for="redactHeaders">Redact these headers</label>
+    <input type="text" id="redactHeaders" placeholder="authorization, cookie">
+    <small>Comma-separated. Values are replaced with [REDACTED].</small>
+
+    <label for="tags">Tags</label>
+    <input type="text" id="tags" placeholder="research, to-read">
+    <small>Comma-separated; sent with every capture.</small>
+
+    <p style="margin-top: 2rem">
+      <button id="save">Save</button>
+      <button id="test" type="button">Test archive endpoint</button>
+      <button id="testPending" type="button">Test pending list</button>
+      <button id="testStatus" type="button">Test status endpoint</button>
+    </p>
+    <small>Keyboard shortcut: Alt+Shift+A by default. Firefox: <code>about:addons</code>
+      → ⚙ → Manage Extension Shortcuts. Chrome: <code>chrome://extensions/shortcuts</code>.</small>
+    <div id="status"></div>
+    <script src="common.js"></script>
+    <script src="options.js"></script>
+  </body>
+</html>

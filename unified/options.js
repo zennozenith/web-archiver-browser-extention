@@ -1,22 +1,4 @@
 "use strict";
-const DEFAULTS = {
-  serverUrl: "",
-  pendingUrl: "",
-  refreshMinutes: 5,
-  showBadge: true,
-  promptAfterOpen: true,
-  authMode: "none",
-  authHeaderName: "X-API-Key",
-  authToken: "",
-  // includeHtml: true,
-  includeRequestHeaders: true,
-  includeResponseHeaders: true,
-  includeCookies: false,
-  includeScreenshot: false,
-  redactHeaders: "authorization, proxy-authorization",
-  tags: "",
-  timeoutSec: 30,
-};
 const $ = (id) => document.getElementById(id);
 const status = (msg, cls = "") => {
   $("status").textContent = msg;
@@ -43,13 +25,12 @@ function readForm() {
   return out;
 }
 
-function authHeaders(s) {
-  const h = {};
-  if (s.authToken) {
-    if (s.authMode === "bearer") h["Authorization"] = "Bearer " + s.authToken;
-    else if (s.authMode === "custom" && s.authHeaderName) h[s.authHeaderName] = s.authToken;
-  }
-  return h;
+// Show the derived URLs as placeholders of the override fields
+function updatePlaceholders() {
+  const d = endpoints({ hostUrl: $("hostUrl").value.trim(), archiveUrl: "", pendingUrl: "", statusUrl: "" });
+  $("archiveUrl").placeholder = d.archive || "(derived from server URL)";
+  $("pendingUrl").placeholder = d.pending || "(derived from server URL)";
+  $("statusUrl").placeholder = d.status || "(derived from server URL)";
 }
 
 async function load() {
@@ -59,10 +40,13 @@ async function load() {
     if (el.type === "checkbox") el.checked = s[k];
     else el.value = s[k];
   }
+  if (s.archiveUrl || s.pendingUrl || s.statusUrl) document.querySelector("details").open = true;
   toggleAuthRows();
+  updatePlaceholders();
 }
 
 $("authMode").addEventListener("change", toggleAuthRows);
+$("hostUrl").addEventListener("input", updatePlaceholders);
 
 // Optional permissions must be requested from a user gesture (the click itself)
 $("includeCookies").addEventListener("change", async (e) => {
@@ -77,7 +61,7 @@ $("includeCookies").addEventListener("change", async (e) => {
 
 $("save").addEventListener("click", async () => {
   const s = readForm();
-  for (const k of ["serverUrl", "pendingUrl"]) {
+  for (const k of ["hostUrl", "archiveUrl", "pendingUrl", "statusUrl"]) {
     if (s[k]) {
       try {
         new URL(s[k]);
@@ -93,36 +77,61 @@ $("save").addEventListener("click", async () => {
 
 $("test").addEventListener("click", async () => {
   const s = readForm();
-  if (!s.serverUrl) return status("Enter an archive endpoint URL first.", "err");
-  status("Testing…");
+  const ep = endpoints(s);
+  if (!ep.archive) return status("Enter a server URL first.", "err");
+  status("Testing " + ep.archive + " …");
   try {
-    const res = await fetch(s.serverUrl, { method: "GET", headers: authHeaders(s) });
+    const res = await fetchT(ep.archive, { method: "GET", headers: authHeaders(s, false) }, s.timeoutSec);
     // Any HTTP response proves the server is reachable; 405 is common for POST-only endpoints.
     const note = res.status === 405 ? " (POST-only endpoint – reachable)" : "";
     status(`Reached server: HTTP ${res.status}${note}`, res.status < 500 ? "ok" : "err");
   } catch (e) {
-    status("Connection failed: " + e.message, "err");
+    status("Connection failed: " + errMsg(e), "err");
   }
 });
 
 $("testPending").addEventListener("click", async () => {
   const s = readForm();
-  if (!s.pendingUrl) return status("Enter a pending list URL first.", "err");
-  status("Testing…");
+  const ep = endpoints(s);
+  if (!ep.pending) return status("Enter a server URL first.", "err");
+  status("Testing " + ep.pending + " …");
   try {
-    const res = await fetch(s.pendingUrl, {
-      headers: { Accept: "application/json", ...authHeaders(s) },
-    });
-    if (!res.ok) return status(`Server responded HTTP ${res.status}`, "err");
+    const res = await fetchT(
+      ep.pending,
+      { headers: { Accept: "application/json", ...authHeaders(s, false) } },
+      s.timeoutSec,
+    );
+    if (!res.ok) return status(await httpError(res), "err");
     const data = await res.json();
     const arr = Array.isArray(data)
       ? data
       : data && (data.items || data.urls || data.pending || data.results || data.data);
-    if (!Array.isArray(arr))
-      return status("Reachable, but the response isn't a JSON array.", "err");
+    if (!Array.isArray(arr)) return status("Reachable, but the response isn't a JSON array.", "err");
     status(`OK – ${arr.length} pending item(s).`, "ok");
   } catch (e) {
-    status("Failed: " + e.message, "err");
+    status("Failed: " + errMsg(e), "err");
+  }
+});
+
+$("testStatus").addEventListener("click", async () => {
+  const s = readForm();
+  const ep = endpoints(s);
+  if (!ep.status) return status("Enter a server URL first.", "err");
+  status("Testing " + ep.status + " …");
+  try {
+    const u = new URL(ep.status);
+    u.searchParams.set("url", "https://example.com/");
+    const res = await fetchT(
+      u.href,
+      { headers: { Accept: "application/json", ...authHeaders(s, false) } },
+      s.timeoutSec,
+    );
+    if (res.status === 404) return status("OK – HTTP 404 (treated as 'not archived').", "ok");
+    if (!res.ok) return status(await httpError(res), "err");
+    await res.json();
+    status("OK – status endpoint returned valid JSON.", "ok");
+  } catch (e) {
+    status("Failed: " + errMsg(e), "err");
   }
 });
 
