@@ -36,5 +36,9 @@ dist-ssr
 *.sw?
 
 
-/build
 /temp
+
+# Local test archive data
+archives/*
+!archives/.gitkeep
+

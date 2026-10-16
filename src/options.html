@@ -1,52 +1,131 @@
 <!doctype html>
-<html><head><meta charset="utf-8"><title>URL Archiver — Preferences</title><link rel="stylesheet" href="options.css"></head>
-<body><div class="wrap">
-<h1>URL Archiver — Preferences</h1>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>URL Archiver — Preferences</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>URL Archiver — Preferences</h1>
 
-<div id="perm" class="notice" hidden>Site access isn't granted yet (needed to read pages and request headers).
-  <button id="btn-perm">Grant site access</button></div>
+      <div id="perm" class="notice" hidden>
+        Site access isn't granted yet (needed to read pages and request headers).
+        <button id="btn-perm">Grant site access</button>
+      </div>
 
-<fieldset><legend>Server</legend>
-  <label>Archive server URL
-    <input data-key="serverUrl" type="url" placeholder="https://archive.example.com/"></label>
-  <label>API token <span class="hint">(optional, sent as <code>Authorization: Bearer …</code>)</span>
-    <input data-key="apiToken" type="password" autocomplete="off"></label>
-</fieldset>
+      <fieldset>
+        <legend>Server</legend>
+        <label
+          >Archive server URL
+          <input data-key="serverUrl" type="url" placeholder="https://archive.example.com/"
+        /></label>
+        <label
+          >API token
+          <span class="hint">(optional, sent as <code>Authorization: Bearer …</code>)</span>
+          <input data-key="apiToken" type="password" autocomplete="off"
+        /></label>
+      </fieldset>
 
-<fieldset><legend>Endpoints</legend>
-  <p class="hint">Derived from the server URL by default. Fill a field only to override. For the check endpoint, <code>{url}</code> may be used as a placeholder; otherwise <code>?url=</code> is appended.</p>
-  <label>Archive endpoint (POST) <input data-key="archiveUrl" type="url"></label>
-  <label>Pending endpoint (GET) <input data-key="pendingUrl" type="url"></label>
-  <label>Check endpoint (GET) <input data-key="checkUrl" type="text"></label>
-  <table id="effective"><thead><tr><th>Effective</th><th>URL</th><th>Source</th></tr></thead><tbody></tbody></table>
-  <div class="actions"><button id="btn-test" type="button">Test connection</button><span id="test-result"></span></div>
-</fieldset>
+      <fieldset>
+        <legend>Endpoints</legend>
+        <p class="hint">
+          Derived from the server URL by default. Fill a field only to override. For the check
+          endpoint, <code>{url}</code> may be used as a placeholder; otherwise <code>?url=</code> is
+          appended.
+        </p>
+        <label>Archive endpoint (POST) <input data-key="archiveUrl" type="url" /></label>
+        <label>Pending endpoint (GET) <input data-key="pendingUrl" type="url" /></label>
+        <label>Check endpoint (GET) <input data-key="checkUrl" type="text" /></label>
+        <table id="effective">
+          <thead>
+            <tr>
+              <th>Effective</th>
+              <th>URL</th>
+              <th>Source</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <div class="actions">
+          <button id="btn-test" type="button">Test connection</button><span id="test-result"></span>
+        </div>
+      </fieldset>
 
-<fieldset><legend>Capture</legend>
-  <label class="chk"><input data-key="includeScreenshot" type="checkbox"> Include screenshot</label>
-  <label>Screenshot format
-    <select data-key="screenshotFormat"><option value="png">PNG</option><option value="jpeg">JPEG (smaller)</option></select></label>
-  <label>JPEG quality (1–100) <input data-key="jpegQuality" type="number" min="1" max="100"></label>
-  <label class="chk"><input data-key="fullPageScreenshot" type="checkbox"> Full-page screenshot <span class="hint">(Firefox only; Chrome captures the visible area)</span></label>
-  <label class="chk"><input data-key="includeResponseHeaders" type="checkbox"> Include response headers</label>
-  <label class="chk"><input data-key="includeSensitiveHeaders" type="checkbox"> Include sensitive headers unredacted <span class="hint">(Cookie, Authorization, Set-Cookie)</span></label>
-  <label>Upload timeout (seconds) <input data-key="requestTimeoutSec" type="number" min="10" max="1800"></label>
-</fieldset>
+      <fieldset>
+        <legend>Capture</legend>
+        <label class="chk"
+          ><input data-key="includeScreenshot" type="checkbox" /> Include screenshot</label
+        >
+        <label
+          >Screenshot format
+          <select data-key="screenshotFormat">
+            <option value="png">PNG</option>
+            <option value="jpeg">JPEG (smaller)</option>
+          </select></label
+        >
+        <label
+          >JPEG quality (1–100) <input data-key="jpegQuality" type="number" min="1" max="100"
+        /></label>
+        <label class="chk"
+          ><input data-key="fullPageScreenshot" type="checkbox" /> Full-page screenshot
+          <span class="hint">(Firefox only; Chrome captures the visible area)</span></label
+        >
+        <label class="chk"
+          ><input data-key="includeResponseHeaders" type="checkbox" /> Include response
+          headers</label
+        >
+        <label class="chk"
+          ><input data-key="includeSensitiveHeaders" type="checkbox" /> Include sensitive headers
+          unredacted <span class="hint">(Cookie, Authorization, Set-Cookie)</span></label
+        >
+        <label
+          >Upload timeout (seconds)
+          <input data-key="requestTimeoutSec" type="number" min="10" max="1800"
+        /></label>
+      </fieldset>
 
-<fieldset><legend>Toolbar &amp; pending list</legend>
-  <label class="chk"><input data-key="autoCheck" type="checkbox"> Check archive status automatically when a page loads</label>
-  <label>Refresh pending list every (minutes, 0 = never) <input data-key="pendingRefreshMinutes" type="number" min="0" max="1440"></label>
-  <label>Max pending items to keep <input data-key="pendingLimit" type="number" min="10" max="5000"></label>
-  <label>After “Archive” on a pending item opens a page
-    <select data-key="directArchiveMode"><option value="prompt">Ask me on the page</option><option value="auto">Archive automatically</option></select></label>
-  <label>Wait after page load before prompting/archiving (seconds) <input data-key="directArchiveDelaySec" type="number" min="0" max="60"></label>
-</fieldset>
+      <fieldset>
+        <legend>Toolbar &amp; pending list</legend>
+        <label class="chk"
+          ><input data-key="autoCheck" type="checkbox" /> Check archive status automatically when a
+          page loads</label
+        >
+        <label
+          >Refresh pending list every (minutes, 0 = never)
+          <input data-key="pendingRefreshMinutes" type="number" min="0" max="1440"
+        /></label>
+        <label
+          >Max pending items to keep
+          <input data-key="pendingLimit" type="number" min="10" max="5000"
+        /></label>
+        <label
+          >After “Archive” on a pending item opens a page
+          <select data-key="directArchiveMode">
+            <option value="prompt">Ask me on the page</option>
+            <option value="auto">Archive automatically</option>
+          </select></label
+        >
+        <label
+          >Wait after page load before prompting/archiving (seconds)
+          <input data-key="directArchiveDelaySec" type="number" min="0" max="60"
+        /></label>
+      </fieldset>
 
-<fieldset><legend>Keyboard shortcut</legend>
-  <p>Archive current page: <strong id="shortcut">…</strong> <button id="btn-shortcut" type="button">Change shortcut</button></p>
-  <p id="shortcut-help" class="hint" hidden></p>
-</fieldset>
+      <fieldset>
+        <legend>Keyboard shortcut</legend>
+        <p>
+          Archive current page: <strong id="shortcut">…</strong>
+          <button id="btn-shortcut" type="button">Change shortcut</button>
+        </p>
+        <p id="shortcut-help" class="hint" hidden></p>
+      </fieldset>
 
-<div class="actions"><button id="btn-save" class="primary">Save</button><span id="save-result"></span></div>
-</div>
-<script src="common.js"></script><script src="options.js"></script></body></html>
+      <div class="actions">
+        <button id="btn-save" class="primary">Save</button><span id="save-result"></span>
+      </div>
+    </div>
+    <script src="common.js"></script>
+    <script src="options.js"></script>
+  </body>
+</html>

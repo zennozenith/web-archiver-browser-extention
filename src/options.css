@@ -1,19 +1,139 @@
-:root{--bg:#fff;--fg:#1f2328;--muted:#6b7280;--border:#d0d7de;--accent:#2563eb;--ok:#188038;--err:#d93025;--warn:#b26a00}
-@media(prefers-color-scheme:dark){:root{--bg:#1b1d21;--fg:#e6e8eb;--muted:#9aa3af;--border:#3a3f46;--accent:#5b9bff;--ok:#5bd17f;--err:#ff7b72;--warn:#f0b04a}}
-body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,sans-serif}
-.wrap{max-width:720px;margin:0 auto;padding:24px 16px 60px}
-h1{font-size:20px}
-fieldset{border:1px solid var(--border);border-radius:10px;margin:16px 0;padding:12px 16px;display:flex;flex-direction:column;gap:10px}
-legend{font-weight:600;padding:0 6px}
-label{display:flex;flex-direction:column;gap:4px}label.chk{flex-direction:row;align-items:center;gap:8px}
-input[type=url],input[type=text],input[type=password],input[type=number],select{font:inherit;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--fg)}
-input[type=number]{max-width:160px}
-.hint{color:var(--muted);font-size:12px;font-weight:400}
-code{background:rgba(127,127,127,.15);padding:0 4px;border-radius:4px}
-button{font:inherit;padding:6px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--fg);cursor:pointer}
-button.primary{background:var(--accent);color:#fff;border-color:var(--accent);font-weight:600}
-.actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-.notice{border:1px solid var(--warn);color:var(--warn);padding:10px 12px;border-radius:8px;display:flex;gap:12px;align-items:center;justify-content:space-between}
-table{border-collapse:collapse;width:100%;font-size:12px}th,td{text-align:left;padding:4px 6px;border-bottom:1px solid var(--border);word-break:break-all}
-.ok{color:var(--ok)}.err{color:var(--err)}
-#test-result{white-space:pre-wrap;font-size:12px}
+:root {
+  --bg: #fff;
+  --fg: #1f2328;
+  --muted: #6b7280;
+  --border: #d0d7de;
+  --accent: #2563eb;
+  --ok: #188038;
+  --err: #d93025;
+  --warn: #b26a00;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1b1d21;
+    --fg: #e6e8eb;
+    --muted: #9aa3af;
+    --border: #3a3f46;
+    --accent: #5b9bff;
+    --ok: #5bd17f;
+    --err: #ff7b72;
+    --warn: #f0b04a;
+  }
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font:
+    14px/1.45 system-ui,
+    sans-serif;
+}
+.wrap {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 24px 16px 60px;
+}
+h1 {
+  font-size: 20px;
+}
+fieldset {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin: 16px 0;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+legend {
+  font-weight: 600;
+  padding: 0 6px;
+}
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+label.chk {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+input[type="url"],
+input[type="text"],
+input[type="password"],
+input[type="number"],
+select {
+  font: inherit;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+}
+input[type="number"] {
+  max-width: 160px;
+}
+.hint {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+code {
+  background: rgba(127, 127, 127, 0.15);
+  padding: 0 4px;
+  border-radius: 4px;
+}
+button {
+  font: inherit;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+button.primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.notice {
+  border: 1px solid var(--warn);
+  color: var(--warn);
+  padding: 10px 12px;
+  border-radius: 8px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+}
+th,
+td {
+  text-align: left;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+  word-break: break-all;
+}
+.ok {
+  color: var(--ok);
+}
+.err {
+  color: var(--err);
+}
+#test-result {
+  white-space: pre-wrap;
+  font-size: 12px;
+}
