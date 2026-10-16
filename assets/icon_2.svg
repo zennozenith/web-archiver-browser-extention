@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4F46E5" />
+      <stop offset="100%" stop-color="#7C3AED" />
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8" />
+      <stop offset="100%" stop-color="#818CF8" />
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+  
+  <!-- Rounded Base Background -->
+  <rect x="8" y="8" width="112" height="112" rx="26" fill="url(#bgGrad)" filter="url(#shadow)"/>
+  
+  <!-- Outer Archival Tray / Box -->
+  <path d="M30 44 C30 38, 34 34, 40 34 L88 34 C94 34, 98 38, 98 44 L98 84 C98 90, 94 94, 88 94 L40 94 C34 94, 30 90, 30 84 Z" 
+        fill="none" stroke="#FFFFFF" stroke-width="6" stroke-linejoin="round" opacity="0.9" />
+  
+  <!-- Front Slot / Handle Bar -->
+  <rect x="46" y="70" width="36" height="8" rx="4" fill="#FFFFFF" opacity="0.85" />
+  
+  <!-- Downward Archiving Arrow into the Tray -->
+  <path d="M64 26 L64 58" stroke="url(#accentGrad)" stroke-width="7" stroke-linecap="round"/>
+  <path d="M52 46 L64 58 L76 46" stroke="url(#accentGrad)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

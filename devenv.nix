@@ -1,13 +1,17 @@
-{
-  pkgs,
-  lib,
-  config,
-  inputs,
-  ...
-}: {
+{pkgs, ...}: {
   env.GREET = "devenv";
 
-  packages = [pkgs.git pkgs.watchexec];
+  packages = [
+    pkgs.git
+    pkgs.librsvg
+    pkgs.bash
+    pkgs.zip
+    pkgs.jq
+  ];
+
+  tasks."build:all" = {
+    exec = "./build.sh";
+  };
 
   languages = {
     typescript.enable = true;
@@ -17,24 +21,5 @@
       nodejs.enable = false;
       lsp.enable = false;
     };
-  };
-
-  tasks."init:frontend" = {
-    exec = "vp install";
-  };
-
-  tasks."frontend:build" = {
-    exec = "vpr lint && vpr fmt && vpr build";
-    execIfModified = [
-      "src/"
-    ];
-  };
-
-  scripts.watcher = {
-    exec = ''
-      watchexec -q -c -w src/ -w ./package.json -w ./vite.config.js -r --stop-signal SIGKILL \
-      "devenv tasks run frontend:build"
-    '';
-    packages = [pkgs.watchexec];
   };
 }
