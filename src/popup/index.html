@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="content-type" content="text/html; charset=UTF-8">
+		<meta charset="utf-8">
+		<title>URL Archiver</title>
+		<link rel="stylesheet" href="./popup.css">
+	</head>
+
+	<body>
+		<header>
+			<h1>URL Archiver</h1>
+			<button id="btn-options" class="icon" title="Preferences" aria-label="Preferences">⚙</button>
+		</header>
+		<main id="app">
+			<section class="card">
+				<h2>Current page</h2>
+				<div>
+					<div class="title" title="browser extention development setup using typescript at DuckDuckGo">browser extention development setup using typescript at DuckDuckGo</div>
+					<div class="url" title="https://duckduckgo.com/?t=ffab&amp;q=browser+extention+development+setup+using+typescript&amp;ia=web">https://duckduckgo.com/?t=ffab&amp;q=browser+extention+development+setup+using+typescript&amp;ia=web</div>
+				</div>
+				<div class="row">
+					<span class="pill warn">Not archived</span>
+					<button class="sm" title="Re-check archive status">↻</button>
+				</div>
+				<button class="primary">Archive this page
+					<span class="small" style="font-weight:400;opacity:.85">
+						(Alt+Shift+A)
+					</span></button>
+			</section>
+			<section class="card">
+				<div class="row">
+					<h2>Pending (3)</h2>
+					<div class="row">
+						<span class="muted small" title="18/10/2026, 12:28:03 am">just now</span>
+						<button class="sm" title="Refresh pending list">
+							<span class="">↻</span>
+						</button>
+					</div>
+				</div>
+				<ul class="pending">
+					<li>
+						<div class="grow">
+							<div class="title" title="Web Archiving - Wikipedia">Web Archiving - Wikipedia</div>
+							<div class="url" title="https://en.wikipedia.org/wiki/Web_archiving">https://en.wikipedia.org/wiki/Web_archiving · 1d ago</div>
+						</div>
+						<button class="sm" title="Open in a new tab and archive">Archive</button>
+					</li>
+					<li>
+						<div class="grow">
+							<div class="title" title="Hacker News">Hacker News</div>
+							<div class="url" title="https://news.ycombinator.com">https://news.ycombinator.com · 1d ago</div>
+						</div>
+						<button class="sm" title="Open in a new tab and archive">Archive</button>
+					</li>
+					<li>
+						<div class="grow">
+							<div class="title" title="MDN WebExtensions Documentation">MDN WebExtensions Documentation</div>
+							<div class="url" title="https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions">https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions · 2d ago</div>
+						</div>
+						<button class="sm" title="Open in a new tab and archive">Archive</button>
+					</li>
+				</ul>
+			</section>
+		</main>
+		<script type="module" src="./index.ts"></script>
+	</body>
+</html>

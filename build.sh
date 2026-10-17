@@ -5,6 +5,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SRC=$ROOT/src
 DIST=$ROOT/dist
+PUBLIC=$ROOT/public
 ICON=$ROOT/assets/icon.svg
 SIZES=(16 32 48 128)
 
@@ -16,18 +17,17 @@ done
 ICONS=$(mktemp -d)
 trap 'rm -rf "$ICONS"' EXIT
 for s in "${SIZES[@]}"; do
-  rsvg-convert -w "$s" -h "$s" "$ICON" -o "$ICONS/icon$s.png"
+  rsvg-convert -w "$s" -h "$s" "$ICON" -o "$ICONS/icon-$s.png"
 done
+
+cp "$ICONS"/icon-*.png "$PUBLIC/icons/"
 
 rm -rf "$DIST"
 mkdir -p "$DIST"
 
 for target in chrome firefox; do
+  vpr "build:$target"
   out=$DIST/$target
-  cp -r "$SRC" "$out"
-  jq . "$ROOT/manifests/$target.json" > "$out/manifest.json"   # validates + pretty-prints
-  mkdir -p "$out/icons"
-  cp "$ICONS"/icon*.png "$out/icons/"
-  (cd "$out" && zip -qrX "$DIST/url-archiver-$target.zip" .)
+  (cd "$out" && zip -qrX "$DIST/web-archiver-$target.zip" .)
   echo "built $target"
 done

@@ -6,7 +6,6 @@
     pkgs.librsvg
     pkgs.bash
     pkgs.zip
-    pkgs.jq
     pkgs.oxfmt
   ];
 

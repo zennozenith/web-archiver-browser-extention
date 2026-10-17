@@ -22,18 +22,12 @@ export default defineConfig({
   build: {
     outDir,
     emptyOutDir: true,
+    minify: false,
   },
   resolve: {
     alias: {
       "@common": resolve(import.meta.dirname, "src/common"),
       "@src": resolve(import.meta.dirname, "src"),
-    },
-  },
-  server: {
-    port: 5173,
-    strictPort: true,
-    hmr: {
-      port: 5173,
     },
   },
 });

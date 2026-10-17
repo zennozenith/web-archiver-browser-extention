@@ -1,6 +1,6 @@
-# URL Archiver (Chrome + Firefox, Manifest V3)
+# Web Archiver (Chrome + Firefox, Manifest V3)
 
-Build: `./build.py` → `dist/chrome`, `dist/firefox` and `dist/url-archiver-*.zip`.
+Build: `./build.py` → `dist/chrome`, `dist/firefox` and `dist/web-archiver-*.zip`.
 Only the manifest differs (Chrome: service worker; Firefox: event-page scripts).
 All code is shared in `src/`.
 
