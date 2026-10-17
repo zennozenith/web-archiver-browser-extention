@@ -5,16 +5,17 @@
   "description": "A modern Chrome and Firefox Manifest V3 extension starter built with Bun, TypeScript, and Vite.",
   "type": "module",
   "scripts": {
-    "dev": "TARGET=chrome vite",
-    "dev:chrome": "TARGET=chrome vite",
-    "dev:firefox": "TARGET=firefox vite",
+    "dev": "TARGET=chrome vp dev",
+    "dev:chrome": "TARGET=chrome vp dev",
+    "dev:firefox": "TARGET=firefox vp dev",
     "build": "bun run build:chrome && bun run build:firefox",
-    "build:chrome": "tsc --noEmit && TARGET=chrome vite build",
-    "build:firefox": "tsc --noEmit && TARGET=firefox vite build",
+    "build:chrome": "tsc --noEmit && TARGET=chrome vp build",
+    "build:firefox": "tsc --noEmit && TARGET=firefox vp build",
     "typecheck": "tsc --noEmit",
     "lint:firefox": "web-ext lint --source-dir dist/firefox",
     "start:firefox": "web-ext run --source-dir dist/firefox",
-    "preview": "vite preview"
+    "preview": "vp preview",
+    "prepare": "vp config"
   },
   "dependencies": {
     "webextension-polyfill": "^0.12.0"
@@ -25,7 +26,11 @@
     "@types/node": "^26.6.5",
     "@types/webextension-polyfill": "^0.12.6",
     "typescript": "^7.0.2",
-    "vite": "^8.3.4",
+    "vite": "npm:@voidzero-dev/vite-plus-core@1.1.0",
+    "vite-plus": "1.1.0",
     "web-ext": "^10.8.0"
+  },
+  "overrides": {
+    "vite": "npm:@voidzero-dev/vite-plus-core@1.1.0"
   }
 }
