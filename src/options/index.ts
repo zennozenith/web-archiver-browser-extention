@@ -1,14 +1,16 @@
 import browser from "webextension-polyfill";
 
 import {
-  $,
+  getElementById,
   DEFAULT_SETTINGS,
-  deriveEndpoints,
   ExtensionSettings,
+  getEndpoint,
   getExtentionSettings,
+  Result,
   saveSettings,
   setElementText,
 } from "@common/index";
+import { createError, createOk } from "@common/error";
 
 // DOM Elements
 const form = document.getElementById("options-form") as HTMLFormElement;
@@ -19,7 +21,6 @@ const toast = document.getElementById("toast") as HTMLDivElement;
 
 const inputServerUrl = document.querySelector("[data-key=server-url") as HTMLInputElement;
 const inputApiToken = document.querySelector("[data-key=api-token") as HTMLInputElement;
-const inputArchiveUrl = document.querySelector("[data-key=archive-url") as HTMLInputElement;
 const inputPendingUrl = document.querySelector("[data-key=pending-url") as HTMLInputElement;
 const inputCheckUrl = document.querySelector("[data-key=check-url") as HTMLInputElement;
 const inputIncludeScreenshot = document.querySelector(
@@ -94,7 +95,6 @@ async function loadSettings(): Promise<void> {
   try {
     const settings = await getExtentionSettings();
     fillForm(settings);
-    previewUrls();
   } catch (err) {
     showToast(`Failed to load settings: ${err}`, "error");
   }
@@ -107,9 +107,8 @@ function readForm(): ExtensionSettings {
   return {
     serverUrl: inputServerUrl.value,
     apiToken: inputApiToken.value,
-    archiveUrl: inputArchiveUrl.value,
-    pendingUrl: inputPendingUrl.value,
-    checkUrl: inputCheckUrl.value,
+    pendingUrl: { override: inputPendingUrl.value !== "", url: inputPendingUrl.value },
+    checkUrl: { override: inputCheckUrl.value !== "", url: inputCheckUrl.value },
     includeScreenshot: inputIncludeScreenshot.checked,
     screenshotFormat: selectScreenshotFormat.value as ExtensionSettings["screenshotFormat"],
     jpegQuality: Number(inputJpegQuality.value),
@@ -131,78 +130,106 @@ function readForm(): ExtensionSettings {
 /**
  * Populate form with settings values
  */
-function fillForm(settings: ExtensionSettings): void {
-  inputServerUrl.value = settings.serverUrl;
-  inputApiToken.value = settings.apiToken;
-  inputArchiveUrl.value = settings.archiveUrl;
-  inputPendingUrl.value = settings.pendingUrl;
-  inputCheckUrl.value = settings.checkUrl;
-  inputIncludeScreenshot.checked = settings.includeScreenshot;
-  selectScreenshotFormat.value = settings.screenshotFormat;
-  inputJpegQuality.value = String(settings.jpegQuality);
-  inputFullPageScreenshot.checked = settings.fullPageScreenshot;
-  inputIncludeRequestHeaders.checked = settings.includeRequestHeaders;
-  inputIncludeResponseHeaders.checked = settings.includeResponseHeaders;
-  inputIncludeSensitiveHeaders.checked = settings.includeSensitiveHeaders;
-  inputRequestTimeoutSec.value = String(settings.requestTimeoutSec);
-  inputAutoCheck.checked = settings.autoCheck;
-  inputPendingRefreshMinutes.value = String(settings.pendingRefreshMinutes);
-  inputPendingLimit.value = String(settings.pendingLimit);
-  selectDirectArchiveMode.value = settings.directArchiveMode;
-  inputDirectArchiveDelaySec.value = String(settings.directArchiveDelaySec);
-  selectTheme.value = settings.theme;
-  inputShowBadge.checked = settings.showBadge;
+function fillForm(extentionSettings: ExtensionSettings): void {
+  inputServerUrl.value = extentionSettings.serverUrl;
+  inputApiToken.value = extentionSettings.apiToken;
+  inputIncludeScreenshot.checked = extentionSettings.includeScreenshot;
+  selectScreenshotFormat.value = extentionSettings.screenshotFormat;
+  inputJpegQuality.value = String(extentionSettings.jpegQuality);
+  inputFullPageScreenshot.checked = extentionSettings.fullPageScreenshot;
+  inputIncludeRequestHeaders.checked = extentionSettings.includeRequestHeaders;
+  inputIncludeResponseHeaders.checked = extentionSettings.includeResponseHeaders;
+  inputIncludeSensitiveHeaders.checked = extentionSettings.includeSensitiveHeaders;
+  inputRequestTimeoutSec.value = String(extentionSettings.requestTimeoutSec);
+  inputAutoCheck.checked = extentionSettings.autoCheck;
+  inputPendingRefreshMinutes.value = String(extentionSettings.pendingRefreshMinutes);
+  inputPendingLimit.value = String(extentionSettings.pendingLimit);
+  selectDirectArchiveMode.value = extentionSettings.directArchiveMode;
+  inputDirectArchiveDelaySec.value = String(extentionSettings.directArchiveDelaySec);
+  selectTheme.value = extentionSettings.theme;
+  inputShowBadge.checked = extentionSettings.showBadge;
 
-  applyTheme(settings.theme);
+  const endpoint = getEndpoint(extentionSettings);
+  if (extentionSettings.pendingUrl.override) {
+    inputPendingUrl.value = endpoint.pending;
+  } else {
+    inputPendingUrl.placeholder = endpoint.pending;
+  }
+
+  if (extentionSettings.checkUrl.override) {
+    inputCheckUrl.value = endpoint.check;
+  } else {
+    inputCheckUrl.placeholder = endpoint.check;
+  }
+
+  applyTheme(extentionSettings.theme);
 }
 
 /**
  * Preview derived urls
  */
 function previewUrls(): void {
-  const endpoints = deriveEndpoints(readForm());
+  const { checkUrl, serverUrl, pendingUrl } = readForm();
+  let endpoint = getEndpoint({ checkUrl, serverUrl, pendingUrl });
 
-  inputArchiveUrl.placeholder = endpoints.derived["archive"] || "(derived from server URL)";
-  inputPendingUrl.placeholder = endpoints.derived["pending"] || "(derived from server URL)";
-  inputCheckUrl.placeholder = endpoints.derived["check"] || "(derived from server URL)";
+  if (serverUrl === "") {
+    const placeholderEndpoints = getEndpoint({
+      checkUrl,
+      pendingUrl,
+      serverUrl: inputServerUrl.placeholder,
+    });
 
-  const tbody = $("effective tbody", HTMLTableSectionElement);
-
-  tbody.replaceChildren();
-  for (const k of ["archive", "pending", "check"] as const) {
-    const tr = document.createElement("tr");
-    for (const t of [k, endpoints[k] || "—", endpoints.source[k]]) {
-      const td = document.createElement("td");
-      td.textContent = t;
-      tr.append(td);
-    }
-    tbody.append(tr);
+    endpoint = placeholderEndpoints;
   }
+
+  inputPendingUrl.placeholder = endpoint.pending;
+  inputCheckUrl.placeholder = endpoint.check;
+
+  const tr1 = getElementById("effective1", HTMLTableRowElement);
+  tr1.children[0].textContent = "pending";
+  tr1.children[1].textContent = endpoint.pending;
+  tr1.children[2].textContent = pendingUrl.override ? "override" : "derived";
+
+  const tr2 = getElementById("effective2", HTMLTableRowElement);
+  tr2.children[0].textContent = "check";
+  tr2.children[1].textContent = endpoint.check;
+  tr2.children[2].textContent = checkUrl.override ? "override" : "derived";
 }
 
 /**
  * Validate Urls
  */
-function validateUrls(extensionSettings: ExtensionSettings): string | null {
-  for (const urlKey of ["serverUrl", "archiveUrl", "pendingUrl"] as const) {
-    if (extensionSettings[urlKey]) {
-      try {
-        const url = new URL(extensionSettings[urlKey]);
-        if (!/^https?:$/.test(url.protocol)) throw 0;
-      } catch {
-        return `${urlKey} must be a valid http(s) URL`;
-      }
+function validateUrls(extensionSettings: ExtensionSettings): Result<null> {
+  // "serverUrl",
+  const { check, pending } = getEndpoint(extensionSettings);
+
+  if (pending !== "") {
+    try {
+      const url = new URL(pending);
+      if (!/^https?:$/.test(url.protocol))
+        return createError({
+          message: "Pending url must have protocol http/https",
+          extra: { url: pending },
+        });
+    } catch {
+      return createError({
+        message: "Pending url must be a valid http(s) URL",
+        extra: { url: pending },
+      });
     }
   }
 
   if (extensionSettings.checkUrl) {
     try {
-      new URL(extensionSettings.checkUrl.replace("{url}", "x"));
+      new URL(check.replace("{url}", "x"));
     } catch {
-      return "checkUrl must be a valid URL";
+      return createError({
+        message: "checkUrl must be a valid URL",
+        extra: { url: pending },
+      });
     }
   }
-  return null;
+  return createOk(null);
 }
 
 // Save form submit
@@ -214,16 +241,20 @@ form.addEventListener("submit", async (e) => {
     const updatedSettings = readForm(),
       err = validateUrls(updatedSettings);
 
-    if (err) {
-      setElementText($("save-result", HTMLSpanElement), err, "err");
-      throw new Error(err);
+    if (err.ok === false) {
+      setElementText(getElementById("save-result", HTMLSpanElement), err.error.message, "err");
+      return;
     }
 
     const saved = await saveSettings(updatedSettings);
     fillForm(saved);
 
-    setElementText($("save-result", HTMLSpanElement), "✓ Preferences saved successfully!", "ok");
-    setTimeout(() => setElementText($("save-result", HTMLSpanElement), ""), 3000);
+    setElementText(
+      getElementById("save-result", HTMLSpanElement),
+      "✓ Preferences saved successfully!",
+      "ok",
+    );
+    setTimeout(() => setElementText(getElementById("save-result", HTMLSpanElement), ""), 3000);
 
     showToast("✓ Preferences saved successfully!", "success");
   } catch (err) {
@@ -313,33 +344,33 @@ selectTheme.addEventListener("change", () => {
 });
 
 inputServerUrl.addEventListener("input", previewUrls);
-inputArchiveUrl.addEventListener("input", previewUrls);
 inputPendingUrl.addEventListener("input", previewUrls);
 inputCheckUrl.addEventListener("input", previewUrls);
 
 // Initialize on page load
 document.addEventListener("DOMContentLoaded", async () => {
   await loadSettings();
+  previewUrls();
 
   try {
     const ok = await browser.permissions.contains({ origins: ["<all_urls>"] });
-    $("perm", HTMLDivElement).hidden = ok;
-    $("btn-perm", HTMLButtonElement).onclick = async () => {
+    getElementById("perm", HTMLDivElement).hidden = ok;
+    getElementById("btn-perm", HTMLButtonElement).onclick = async () => {
       const g = await browser.permissions.request({ origins: ["<all_urls>"] });
-      $("perm", HTMLDivElement).hidden = g;
+      getElementById("perm", HTMLDivElement).hidden = g;
     };
   } catch {}
   try {
     const c = (await browser.commands.getAll()).find((c) => c.name === "archive-page");
-    $("shortcut", HTMLElement).textContent = c?.shortcut || "not set";
+    getElementById("shortcut", HTMLElement).textContent = c?.shortcut || "not set";
   } catch {
-    $("shortcut", HTMLElement).textContent = "unknown";
+    getElementById("shortcut", HTMLElement).textContent = "unknown";
   }
 
-  $("btn-shortcut", HTMLButtonElement).onclick = async () => {
+  getElementById("btn-shortcut", HTMLButtonElement).onclick = async () => {
     if (typeof browser.commands.openShortcutSettings === "function")
       return browser.commands.openShortcutSettings();
-    const help = $("shortcut-help", HTMLParagraphElement);
+    const help = getElementById("shortcut-help", HTMLParagraphElement);
     help.hidden = false;
     if (typeof browser.tabs.captureTab === "function")
       help.textContent = "Open about:addons → gear icon → Manage Extension Shortcuts.";

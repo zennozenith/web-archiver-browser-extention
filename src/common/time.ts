@@ -1,5 +1,7 @@
-export function toDate(dateTime: unknown) {
-  if (dateTime == null || dateTime === "") return null;
+export function toDate(dateTime: unknown): Date | null {
+  if (dateTime == null || dateTime === "") {
+    return null;
+  }
   if (typeof dateTime === "number") return new Date(dateTime < 1e12 ? dateTime * 1000 : dateTime);
   if (/^\d+(\.\d+)?$/.test(String(dateTime))) return toDate(Number(dateTime));
 
@@ -7,12 +9,12 @@ export function toDate(dateTime: unknown) {
   return isNaN(d as unknown as number) ? null : d;
 }
 
-export const formatTime = (dateTime: unknown) => {
+export const formatTime = (dateTime: unknown): string => {
   const d = toDate(dateTime);
   return d ? d.toLocaleString() : String(dateTime ?? "unknown time");
 };
 
-export function timeAgo(t: unknown) {
+export function timeAgo(t: unknown): string {
   const d = toDate(t) as any;
   if (!d) return "";
   const s = Math.max(0, Math.round((Date.now() - d) / 1000));

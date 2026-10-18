@@ -1,23 +1,16 @@
 import browser from "webextension-polyfill";
+
 import {
   ArchiveTabPayload,
   BannerOpts,
   buildCheckUrl,
-  deriveEndpoints,
-  ErrorWithMessage,
   ExtensionSettings,
   formatTime,
   getExtentionSettings,
-  HeaderItem,
-  HeadersWithMeta,
   Int,
   isArchivable,
-  normalizeCheck,
-  normalizePending,
   normalizeUrl,
-  OkStatus,
   Page,
-  Pending,
   request,
   session_storage_delete,
   session_storage_get,
@@ -25,101 +18,39 @@ import {
   sha256,
   Status,
   Url,
+  bgLog as log,
+  Result,
+  getEndpoint,
+  HeadersDetails,
+  ApiSuccessResponse,
+  ApiArchiveVersionsResponse,
+  ApiCheckPendingResponse,
+  PendingResponseInStorage,
 } from "@common/index";
+import { collectPage, pageBanner } from "./page";
+import { createError, createOk, isStandardError } from "@common/error";
+import { WebRequest } from "webextension-polyfill";
 
-console.log("[Background] Service worker / background script initialized");
+log.info("Service worker / background script initialized");
 
 const ALARM = "refresh-pending";
 const SENSITIVE = new Set(["cookie", "authorization", "proxy-authorization", "set-cookie"]);
 const busyTabs = new Set<Int>();
-const inflight = new Map<`${Int}|${Url}`, Promise<Status>>();
+const inflight = new Map<`${Int}|${Url}`, Promise<Result<Status>>>();
 const sleep = (ms: Int) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const headerMemory = new Map<Int, HeadersWithMeta>();
+const headerMemory = new Map<Int, Partial<HeadersDetails>>();
 
-/* ================= in-page banner (prompt / toast) ================= */
-function pageBanner(opts: BannerOpts) {
-  // self-contained: serialized into the page
-  const api = globalThis.browser ?? globalThis.chrome;
-  const ID = "__url_archiver_banner__";
-  document.getElementById(ID)?.remove();
-  const host = document.createElement("div");
-  host.id = ID;
-  host.style.cssText = "all:initial;position:fixed;top:16px;right:16px;z-index:2147483647;";
-
-  const root = host.attachShadow({ mode: "closed" });
-  const style = document.createElement("style");
-  style.textContent =
-    ".b{font:14px/1.4 system-ui,sans-serif;color:#fff;background:#1f2937;border-radius:10px;padding:12px 14px;box-shadow:0 6px 24px rgba(0,0,0,.35);max-width:340px;display:flex;flex-direction:column;gap:10px;word-break:break-word}.b.ok{background:#15803d}.b.err{background:#b91c1c}.r{display:flex;gap:8px;justify-content:flex-end}button{font:inherit;border:0;border-radius:6px;padding:5px 12px;cursor:pointer;background:#fff;color:#111}button.p{background:#3b82f6;color:#fff}";
-  const box = document.createElement("div");
-  root.append(style, box);
-
-  let timer: NodeJS.Timeout;
-
-  const close = () => {
-    clearTimeout(timer);
-    host.remove();
-  };
-
-  function render(kind: string, text: string, buttons: any) {
-    box.className = "b " + (kind || "");
-    box.replaceChildren();
-    const t = document.createElement("div");
-    t.textContent = text;
-    box.append(t);
-    if (buttons && buttons.length) {
-      const row = document.createElement("div");
-      row.className = "r";
-      for (const [label, fn, primary] of buttons) {
-        const b = document.createElement("button");
-        b.textContent = label;
-        if (primary) b.className = "p";
-        b.onclick = fn;
-        row.append(b);
-      }
-      box.append(row);
-    }
-  }
-  const archive = () => {
-    render("", "Archiving…", []);
-    api.runtime
-      .sendMessage({ type: "archiveFromPage" })
-      .then((r) => {
-        if (r && r.ok) {
-          const n = r.status && r.status.count;
-          render("ok", "Archived ✓" + (n ? ` (${n} version${n === 1 ? "" : "s"})` : ""), [
-            ["Close", close],
-          ]);
-          timer = setTimeout(close, 5000);
-        } else
-          render("err", "Archive failed: " + ((r && r.error) || "unknown error"), [
-            ["Close", close],
-          ]);
-      })
-      .catch((e) => render("err", "Archive failed: " + e.message, [["Close", close]]));
-  };
-  if (opts.mode === "prompt")
-    render("", opts.text || "Archive this page?", [
-      ["Dismiss", close],
-      ["Archive now", archive, true],
-    ]);
-  else {
-    render(opts.kind, opts.text, [["Close", close]]);
-    if (opts.kind === "ok") timer = setTimeout(close, 5000);
-  }
-  document.documentElement.append(host);
-}
-
-async function injectBanner(tabId: Int, opts: BannerOpts) {
+async function injectBanner(tabId: Int, opts: BannerOpts): Promise<void> {
   try {
     await browser.scripting.executeScript({ target: { tabId }, func: pageBanner, args: [opts] });
   } catch {
-    /* restricted page */
+    log.warn("restricted page! cannot inject banner");
   }
 }
 
 function headersToObject(
-  headerList: HeaderItem[] | null | undefined,
+  headerList: WebRequest.HttpHeaders | null | undefined,
   keepSensitive: boolean = false,
 ): Record<string, string> {
   const headersMap: Record<string, string> = {};
@@ -142,17 +73,17 @@ function headersToObject(
 /**
  *
  */
-// function patchHeaders(tabId: Int, requestId: Int, patch) {
-//   const current = headerMemory.get(tabId);
-//   const next = {
-//     ...(current && current.requestId === requestId ? current : { requestId }),
-//     ...patch,
-//   };
-//   headerMemory.set(tabId, next);
-//   session_storage_set(`hdr:${tabId}`, next).catch(() => {});
-// }
+function patchHeaders(tabId: Int, requestId: string, patch: Partial<HeadersDetails>): void {
+  const current = headerMemory.get(tabId);
+  const next: Partial<HeadersDetails> = {
+    ...(current && current.requestId === requestId ? current : { requestId }),
+    ...patch,
+  };
+  headerMemory.set(tabId, next);
+  session_storage_set(`hdr:${tabId}`, next).catch(() => {});
+}
 
-async function getHeadersWithMeta(tabId: Int): Promise<HeadersWithMeta | null> {
+async function getHeadersWithDetails(tabId: Int): Promise<Partial<HeadersDetails> | null> {
   return headerMemory.get(tabId) ?? (await session_storage_get(`hdr:${tabId}`)) ?? null;
 }
 
@@ -184,7 +115,7 @@ async function updateBadge({
     if (color) await browser.action.setBadgeBackgroundColor({ tabId, color });
     if (title) await browser.action.setTitle({ tabId, title });
   } catch (err) {
-    console.warn("[Background] Could not update badge:", err);
+    log.warn("[Background] Could not update badge:", err);
   }
 }
 
@@ -223,56 +154,66 @@ function applyStatusBadge(tabId: Int, status: Status | null): Promise<void> {
 
 /* ================= capture + archive ================= */
 
-async function checkTab(tabId: Int): Promise<Promise<Status> | null> {
-  let tab: browser.Tabs.Tab & { url: Url };
+async function checkArchiveVersion(tabId: Int): Promise<Result<Status>> {
+  let tab: browser.Tabs.Tab;
   try {
-    tab = (await browser.tabs.get(tabId)) as browser.Tabs.Tab & { url: Url };
-  } catch {
-    return null;
+    tab = await browser.tabs.get(tabId);
+  } catch (e) {
+    return createError({
+      log,
+      message: `Cannot check tab with id: ${tabId}`,
+      extra: e,
+    });
   }
 
   if (!isArchivable(tab.url)) {
     await session_storage_delete(`status:${tabId}`);
     applyStatusBadge(tabId, null);
-    return { state: "unsupported", url: tab.url };
+    return createOk({ state: "unsupported", url: tab.url as Url });
   }
 
-  const extentionSettins = await getExtentionSettings();
-  const endpoints = deriveEndpoints(extentionSettins);
-  const url = normalizeUrl(tab.url);
+  const extentionSettings = await getExtentionSettings();
+  const endpoint = getEndpoint(extentionSettings);
+  const url = normalizeUrl(tab.url as Url);
 
-  if (!endpoints.check) {
+  if (!endpoint.check) {
     const status: Status = { state: "unconfigured", url };
     await session_storage_set(`status:${tabId}`, status);
     applyStatusBadge(tabId, status);
-    return status;
+    return createOk(status);
   }
 
   const key = `${tabId}|${url}` as const;
   if (inflight.has(key)) {
-    return inflight.get(key)!;
+    const status = await inflight.get(key)!;
+    return status;
   }
 
-  const inflightStatusPromise = (async () => {
+  const inflightStatusPromise: Promise<Result<Status>> = (async () => {
     let status: Status;
     try {
-      const data = await request(buildCheckUrl(endpoints.check, url), {
-        token: extentionSettins.apiToken,
+      const data = await request<ApiArchiveVersionsResponse>(buildCheckUrl(endpoint.check, url), {
+        token: extentionSettings.apiToken,
         timeoutMs: 20000,
       });
-      if (typeof data === "string") throw new Error("Check endpoint returned non-JSON data");
-      status = { state: "ok", url, checkedAt: Date.now(), ...normalizeCheck(data) };
+      if (data.ok === false) {
+        status = { state: "error", url, checkedAt: Date.now(), error: data.error.message };
+      } else {
+        status = { state: "ok", url, checkedAt: Date.now(), ...data.data };
+      }
     } catch (e) {
+      const errorMessage = isStandardError(e) ? e.message : String(e);
       status = {
         state: "error",
         url,
-        error: (e as ErrorWithMessage).message,
+        error: errorMessage,
         checkedAt: Date.now(),
       };
     }
+
     await session_storage_set("status:" + tabId, status);
     applyStatusBadge(tabId, status);
-    return status;
+    return createOk(status);
   })().finally(() => inflight.delete(key));
 
   inflight.set(key, inflightStatusPromise);
@@ -280,30 +221,33 @@ async function checkTab(tabId: Int): Promise<Promise<Status> | null> {
 }
 
 /* ================= pending list ================= */
-let pendingPromise: Promise<void> | null = null;
-function refreshPending() {
+let pendingPromise: Promise<Result<ApiCheckPendingResponse> | null> | null = null;
+function refreshPending(): Promise<Result<ApiCheckPendingResponse> | null> {
   if (pendingPromise) return pendingPromise;
 
   pendingPromise = (async () => {
     const extentionSettings = await getExtentionSettings();
-    const endpoints = deriveEndpoints(extentionSettings);
+    const endpoint = getEndpoint(extentionSettings);
     const { pending: previousPending } = (await browser.storage.local.get({ pending: null })) as {
-      pending: Pending;
+      pending: PendingResponseInStorage;
     };
 
-    if (!endpoints.pending) {
+    if (!endpoint.pending) {
       await browser.storage.local.set({
         pending: { items: [], total: 0, fetchedAt: Date.now(), error: null },
       });
-      return;
+      return null;
     }
     try {
-      const data = await request(endpoints.pending, {
+      const data = await request<ApiCheckPendingResponse>(endpoint.pending, {
         token: extentionSettings.apiToken,
         timeoutMs: 20000,
       });
-      if (typeof data === "string") throw new Error("Pending endpoint returned non-JSON data");
-      const pending = normalizePending(data);
+      if (data.ok === false) {
+        return data;
+      }
+
+      const pending = data.data;
       await browser.storage.local.set({
         pending: {
           items: pending.items.slice(0, extentionSettings.pendingLimit),
@@ -312,59 +256,27 @@ function refreshPending() {
           error: null,
         },
       });
+      return data;
     } catch (e) {
+      const errorMessage = isStandardError(e) ? e.message : String(e);
       await browser.storage.local.set({
         pending: {
           items: previousPending?.items || [],
           total: previousPending?.total || 0,
           fetchedAt: previousPending?.fetchedAt || null,
-          error: (e as ErrorWithMessage).message,
+          error: errorMessage,
         },
+      });
+      return createError({
+        log,
+        message: errorMessage,
+        extra: e,
       });
     }
   })().finally(() => {
     pendingPromise = null;
   });
   return pendingPromise;
-}
-
-/**
- * runs inside the page
- */
-function collectPage(): Page {
-  const dt = document.doctype;
-  const doctype = dt
-    ? `<!DOCTYPE ${dt.name}${dt.publicId ? ` PUBLIC "${dt.publicId}"` : ""}${!dt.publicId && dt.systemId ? " SYSTEM" : ""}${dt.systemId ? ` "${dt.systemId}"` : ""}>\n`
-    : "";
-
-  const meta: Record<string, string | null> = {};
-  document.querySelectorAll("meta[name],meta[property],meta[http-equiv]").forEach((metaElement) => {
-    const attributeValue =
-      metaElement.getAttribute("name") ||
-      metaElement.getAttribute("property") ||
-      metaElement.getAttribute("http-equiv");
-    if (attributeValue && !(attributeValue in meta))
-      meta[attributeValue] = metaElement.getAttribute("content");
-  });
-
-  return {
-    html: doctype + document.documentElement.outerHTML,
-    url: location.href,
-    title: document.title,
-    referrer: document.referrer,
-    lang: document.documentElement.lang || null,
-    charset: document.characterSet,
-    contentType: document.contentType,
-    lastModified: document.lastModified,
-    canonical: document.querySelector<HTMLLinkElement>('link[rel~="canonical"]')?.href || null,
-    favicon: document.querySelector<HTMLLinkElement>('link[rel~="icon"]')?.href || null,
-    meta,
-    viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio },
-    scrollWidth: document.documentElement.scrollWidth,
-    scrollHeight: document.documentElement.scrollHeight,
-    userAgent: navigator.userAgent,
-    language: navigator.language,
-  };
 }
 
 async function takeScreenshot(
@@ -394,8 +306,9 @@ async function takeScreenshot(
           },
         });
       } catch (e) {
+        const errorMessage = isStandardError(e) ? e.message : String(e);
         warnings.push(
-          `Full-page screenshot failed (${(e as ErrorWithMessage).message}); captured the viewport instead`,
+          `Full-page screenshot failed (${errorMessage}); captured the viewport instead`,
         );
       }
     }
@@ -411,24 +324,39 @@ async function takeScreenshot(
   return { blob: await (await fetch(dataUrl)).blob(), ext: format === "jpeg" ? "jpg" : "png" };
 }
 
-async function archiveTab(tabId: Int): Promise<{
-  status: Status | null;
-  response: string | { ok: boolean };
-  warnings: string[];
-}> {
-  if (busyTabs.has(tabId)) throw new Error("An archive is already in progress for this tab");
+async function archiveTab(tabId: Int): Promise<
+  Result<{
+    status: Status | null;
+    response: string | { ok: boolean };
+    warnings: string[];
+  }>
+> {
+  if (busyTabs.has(tabId)) {
+    return createError({ log, message: "An archive is already in progress for this tab" });
+  }
+
   busyTabs.add(tabId);
 
   try {
     await session_storage_delete(`archiveError:${tabId}`);
 
     const extensionSettings = await getExtentionSettings();
-    const endpoints = deriveEndpoints(extensionSettings);
-    if (!endpoints.archive)
-      throw new Error("Server URL is not configured. Open the extension preferences.");
+    if (!extensionSettings.serverUrl) {
+      return createError({
+        log,
+        message: "Server URL is not configured. Open the extension preferences.",
+      });
+    }
 
     const tab = await browser.tabs.get(tabId);
-    if (!isArchivable(tab.url)) throw new Error("Only http(s) pages can be archived.");
+    if (!isArchivable(tab.url)) {
+      return createError({
+        log,
+        message: "Only http(s) pages can be archived.",
+        extra: { url: tab.url },
+      });
+    }
+
     await updateBadge({
       tabId,
       text: "…",
@@ -440,32 +368,48 @@ async function archiveTab(tabId: Int): Promise<{
     try {
       results = await browser.scripting.executeScript({ target: { tabId }, func: collectPage });
     } catch (e) {
-      throw new Error(
-        `Could not read the page (${(e as ErrorWithMessage).message}). If this is Firefox, make sure site access is granted in the preferences.`,
-      );
+      const errorMessage = isStandardError(e) ? e.message : e;
+      return createError({
+        log,
+        message: `Could not read the page (${errorMessage}). If this is Firefox, make sure site access is granted in the preferences.`,
+      });
     }
     const page = results?.[0]?.result as Page | undefined;
-    if (!page) throw new Error("Could not read the page content.");
+    if (!page) {
+      return createError({
+        log,
+        message: "Could not read the page content.",
+      });
+    }
 
     const warnings: string[] = [];
     let screenshot = null;
+
     if (extensionSettings.includeScreenshot) {
       try {
         screenshot = await takeScreenshot(tab, extensionSettings, page, warnings);
       } catch (e) {
-        warnings.push(`Screenshot failed: ${(e as ErrorWithMessage).message}`);
+        const errorMessage = isStandardError(e) ? e.message : e;
+        log.warn(`Screenshot failed: ${errorMessage}`);
+        warnings.push(`Screenshot failed: ${errorMessage}`);
       }
     }
-
-    const headers = await getHeadersWithMeta(tabId);
-    if (!headers)
+    const headers = await getHeadersWithDetails(tabId);
+    if (!headers) {
+      log.warn(
+        "No request headers recorded for this tab (page was loaded before the extension started)",
+      );
       warnings.push(
         "No request headers recorded for this tab (page was loaded before the extension started)",
       );
-    else if (normalizeUrl(headers.url) !== normalizeUrl(page.url))
+    } else if (normalizeUrl(headers.url as Url) !== normalizeUrl(page.url)) {
+      log.warn(
+        "Recorded headers belong to a different URL (page navigated via script/history browser)",
+      );
       warnings.push(
         "Recorded headers belong to a different URL (page navigated via script/history browser)",
       );
+    }
 
     const { html, scrollWidth, scrollHeight, ...pageInfo } = page;
     const htmlBlob = new Blob([html], { type: "text/html;charset=utf-8" });
@@ -523,61 +467,95 @@ async function archiveTab(tabId: Int): Promise<{
       "metadata.json",
     );
     formData.append("html", htmlBlob, "page.html");
-    if (screenshot) formData.append("screenshot", screenshot.blob, `screenshot.${screenshot.ext}`);
+    if (screenshot) {
+      formData.append("screenshot", screenshot.blob, `screenshot.${screenshot.ext}`);
+    }
 
-    const response = await request<{ ok: boolean }>(endpoints.archive, {
+    const endpoint = getEndpoint(extensionSettings);
+    const response = await request<ApiSuccessResponse>(endpoint.server, {
       method: "POST",
       body: formData,
       token: extensionSettings.apiToken,
       timeoutMs: (Number(extensionSettings.requestTimeoutSec) || 120) * 1000,
     });
 
-    const status = await checkTab(tabId); // refresh version info/badge
+    const resultStatus = await checkArchiveVersion(tabId); // refresh version info/badge
+    if (resultStatus.ok === false) {
+      return createError({
+        log,
+        ...resultStatus.error,
+      });
+    }
     refreshPending(); // refresh pending list after archive (not awaited)
-    return { status, response, warnings };
+    return createOk({ status: resultStatus.data, response, warnings });
+  } catch (e) {
+    log.error("Archive request failed", e);
+    return createError({
+      log,
+      message: "Archive request failed",
+      extra: e,
+    });
   } finally {
     busyTabs.delete(tabId);
   }
 }
 
-async function archiveWithFeedback(tabId: Int, { toast }: { toast: boolean }): Promise<any> {
-  // ): Promise<{ ok: boolean } & ReturnType<typeof archiveTab>> {
+async function archiveWithFeedback(
+  tabId: Int,
+  { toast }: { toast: boolean },
+): ReturnType<typeof archiveTab> {
   try {
     const result = await archiveTab(tabId);
+    if (result.ok === false) {
+      return createError({
+        log,
+        ...result.error,
+      });
+    }
+
+    if (result.data.status?.state !== "ok") {
+      return createError({
+        log,
+        message: result.data.status?.state ?? "status not ok",
+        extra: result.data,
+      });
+    }
+
     if (toast) {
-      const n = (result.status as OkStatus)?.count;
+      const n = result.data.status.count;
       injectBanner(tabId, {
         mode: "toast",
         kind: "ok",
         text: `Archived ✓${n ? ` (${n} version${n === 1 ? "" : "s"})` : ""}`,
       });
     }
-    return {
-      ok: true,
-      status: result.status,
-      warnings: result.warnings,
-      response: typeof result.response === "object" ? result.response : null,
-    };
+    return createOk(result.data);
   } catch (e) {
-    const err = e as ErrorWithMessage;
+    const errorMessage = isStandardError(e) ? e.message : String(e);
+
     await session_storage_set("archiveError:" + tabId, {
-      message: err.message,
+      message: errorMessage,
       time: Date.now(),
     });
     updateBadge({
       tabId,
       text: "!",
       color: "#d93025",
-      title: `Archive failed: ${err.message}`,
+      title: `Archive failed: ${errorMessage}`,
     });
 
     if (toast)
       injectBanner(tabId, {
         mode: "toast",
         kind: "err",
-        text: `Archive failed: ${err.message}`,
+        text: `Archive failed: ${errorMessage}`,
       });
-    return { ok: false, error: err.message };
+
+    return createError({
+      log,
+      message: errorMessage,
+      extra: e,
+    });
   }
 }
 
@@ -645,14 +623,14 @@ browser.tabs.onUpdated.addListener(async (tabId, change, tab) => {
   if (change.status === "complete" && (await session_storage_get("open:" + tabId)))
     handleOpened(tabId);
   const extentionSettings = await getExtentionSettings();
-  if (extentionSettings.autoCheck) checkTab(tabId);
+  if (extentionSettings.autoCheck) checkArchiveVersion(tabId);
 });
 
 browser.tabs.onActivated.addListener(async ({ tabId }) => {
   const st = await session_storage_get("status:" + tabId);
   if (st) return;
   const extentionSettings = await getExtentionSettings();
-  if (extentionSettings.autoCheck) checkTab(tabId);
+  if (extentionSettings.autoCheck) checkArchiveVersion(tabId);
 });
 
 browser.tabs.onRemoved.addListener((tabId) => {
@@ -679,7 +657,7 @@ browser.runtime.onInstalled.addListener(async (d) => {
   await ensureAlarm(true);
   refreshPending();
   const extentionSettings = await getExtentionSettings();
-  if (d.reason === "install" && !extentionSettings.serverUrl && !extentionSettings.archiveUrl)
+  if (d.reason === "install" && extentionSettings.serverUrl === "")
     browser.runtime.openOptionsPage();
 });
 
@@ -693,8 +671,46 @@ browser.storage.onChanged.addListener(async (changes, area) => {
   await ensureAlarm(true);
   await refreshPending();
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  if (tab) checkTab(tab.id as number);
+  if (tab) checkArchiveVersion(tab.id as number);
 });
+
+browser.webRequest.onSendHeaders.addListener(
+  (tab) => {
+    if (tab.tabId < 0) return;
+    patchHeaders(tab.tabId, tab.requestId, {
+      tabId: tab.tabId,
+      requestId: tab.requestId,
+      url: tab.url,
+      method: tab.method,
+      requestHeaders: tab.requestHeaders,
+      timeStamp: tab.timeStamp,
+    });
+  },
+  {
+    urls: ["http://*/*", "https://*/*"],
+    types: ["main_frame"],
+  },
+  ["requestHeaders", "extraHeaders"],
+);
+
+browser.webRequest.onHeadersReceived.addListener(
+  (tab) => {
+    if (tab.tabId < 0) return;
+    patchHeaders(tab.tabId, tab.requestId, {
+      requestId: tab.requestId,
+      tabId: tab.tabId,
+      url: tab.url,
+      statusCode: tab.statusCode,
+      statusLine: tab.statusLine,
+      responseHeaders: tab.responseHeaders,
+    });
+  },
+  {
+    urls: ["http://*/*", "https://*/*"],
+    types: ["main_frame"],
+  },
+  ["responseHeaders", "extraHeaders"],
+);
 
 ensureAlarm();
 
@@ -704,20 +720,21 @@ browser.runtime.onMessage.addListener(
   async (message: unknown, sender: browser.Runtime.MessageSender): Promise<any> => {
     // const msg = message as BaseMessage;
     const msg = message as any;
+    log.debug(msg);
     // console.log("[Background] Received message:", msg?.type, "from:", sender.id);
 
     try {
       switch (msg.type) {
         case "GET_STATE": {
           const extentionSettings = await getExtentionSettings();
-          const endpoints = deriveEndpoints(extentionSettings);
+          const endpoint = getEndpoint(extentionSettings);
           const { pending } = await browser.storage.local.get({ pending: null });
           return {
             ok: true,
             configured: {
-              archive: !!endpoints.archive,
-              pending: !!endpoints.pending,
-              check: !!endpoints.check,
+              server: endpoint.server !== "",
+              pending: endpoint.pending !== "",
+              check: endpoint.check !== "",
             },
             status:
               msg.tabId != null
@@ -732,9 +749,9 @@ browser.runtime.onMessage.addListener(
           };
         }
         case "CHECK_TAB":
-          return { ok: true, status: await checkTab(msg.tabId) };
+          return { ok: true, status: await checkArchiveVersion(msg.tabId) };
         case "ARCHIVE_TAB": {
-          const payload = msg.payload as ArchiveTabPayload;
+          const payload = msg as ArchiveTabPayload;
           return await archiveWithFeedback(payload.tabId, { toast: false });
         }
         case "ARCHIVE_FROM_PAGE":

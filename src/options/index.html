@@ -44,10 +44,9 @@
 						is
 						appended.
 					</p>
-					<label>Archive endpoint (POST) <input data-key="archive-url" type="url"></label>
 					<label>Pending endpoint (GET) <input data-key="pending-url" type="url"></label>
 					<label>Check endpoint (GET) <input data-key="check-url" type="text"></label>
-					<table id="effective">
+					<table>
 						<thead>
 							<tr>
 								<th>Effective</th>
@@ -57,19 +56,14 @@
 						</thead>
 
 						<tbody>
-							<tr>
-								<td>archive</td>
-								<td>http://localhost:3000/api/archive</td>
-								<td>derived</td>
-							</tr>
-							<tr>
+							<tr id="effective1">
 								<td>pending</td>
-								<td>http://localhost:3000/api/pending</td>
+								<td>https://archive.example.com/api/pending</td>
 								<td>derived</td>
 							</tr>
-							<tr>
+							<tr id="effective2">
 								<td>check</td>
-								<td>http://localhost:3000/api/check</td>
+								<td>https://archive.example.com/api/check</td>
 								<td>derived</td>
 							</tr>
 						</tbody>

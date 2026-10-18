@@ -1,5 +1,33 @@
+import { WebRequest } from "webextension-polyfill";
+import { ApiArchiveVersionsResponse } from "./reqwest";
+
 export type Int = number;
 export type Url = string;
+
+export interface OverrideUrl {
+  override: boolean;
+  url: Url;
+}
+
+export type ErrorType = "generic" | (string & {});
+
+export interface CustomError<T = unknown> {
+  type: string;
+  message: string;
+  extra?: T;
+}
+
+export interface Ok<T> {
+  ok: true;
+  data: T;
+}
+
+export interface Err<E> {
+  ok: false;
+  error: CustomError<E>;
+}
+
+export type Result<T, E = unknown> = Ok<T> | Err<E>;
 
 export type MessageType =
   | "ARCHIVE_TAB"
@@ -16,22 +44,8 @@ export interface BaseMessage<T = unknown> {
   payload?: T;
 }
 
-export interface ErrorWithMessage {
-  message: string;
-}
-
-export interface DerivedEndpoint {
-  derived: {
-    archive: Url;
-    pending: Url;
-    check: Url;
-  };
-  source: {
-    archive: "none" | "override" | "derived";
-    pending: "none" | "override" | "derived";
-    check: "none" | "override" | "derived";
-  };
-  archive: Url;
+export interface Endpoint {
+  server: Url;
   pending: Url;
   check: Url;
 }
@@ -40,19 +54,16 @@ export interface ArchiveTabPayload {
   tabId: Int;
 }
 
-export interface HeaderItem {
-  name: string;
-  value?: string;
-}
-
-export interface HeadersWithMeta {
-  requestHeaders: HeaderItem[];
-  responseHeaders: HeaderItem[];
-  url: Url;
+export interface HeadersDetails {
+  requestId: string;
+  url: string;
   method: string;
-  statusCode: number;
-  time: number;
+  tabId: number;
+  timeStamp: number;
+  requestHeaders?: WebRequest.HttpHeaders;
   statusLine: string;
+  responseHeaders?: WebRequest.HttpHeaders;
+  statusCode: number;
 }
 
 export interface ReqeustOptions {
@@ -71,9 +82,8 @@ export interface MessageResponse<T = unknown> {
 
 export interface ExtensionSettings {
   apiToken: string;
-  archiveUrl: Url;
   autoCheck: boolean;
-  checkUrl: Url;
+  checkUrl: OverrideUrl;
   directArchiveDelaySec: Int;
   directArchiveMode: "prompt" | "auto";
   fullPageScreenshot: boolean; // Firefox only
@@ -84,7 +94,7 @@ export interface ExtensionSettings {
   jpegQuality: Int;
   pendingLimit: Int;
   pendingRefreshMinutes: Int; // 0 = off
-  pendingUrl: Url;
+  pendingUrl: OverrideUrl;
   requestTimeoutSec: Int;
   screenshotFormat: "png" | "jpeg";
   serverUrl: Url;
@@ -115,39 +125,6 @@ export interface Page {
   language: string;
 }
 
-// pending:"{"items":[
-//
-// {"url":"https://en.wikipedia.org/wiki/Web_archiving",
-// "title":"Web Archiving - Wikipedia",
-// "addedAt":"2026-10-16T13:27:27.003Z"},
-// {"url":"https://news.ycombinator.com",
-// "title":"Hacker News","addedAt":"2026-10-16T10:27:27.004Z"},
-// {"url":"https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions",
-// "title":"MDN WebExtensions Documentation","addedAt":"2026-10-15T15:27:27.004Z"}
-// ],"total":3,"fetchedAt":1792249602948,"error":null}"
-
-export interface Pending {
-  items: {
-    url: Url;
-    title: string;
-    addedAt: string;
-  }[];
-  total: number;
-  fetchedAt: number;
-  error: string | null;
-}
-
-export interface CheckUrlResponse {
-  archived: boolean;
-  count: number;
-  versions: {
-    id: string;
-    time: string;
-    url: Url;
-  }[];
-  last?: string | null;
-}
-
 export interface BannerOpts {
   kind: "ok" | "err" | (string & {});
   text: string;
@@ -171,7 +148,7 @@ export interface ErrorStatus {
   checkedAt: number;
 }
 
-export interface OkStatus extends CheckUrlResponse {
+export interface OkStatus extends ApiArchiveVersionsResponse {
   state: "ok";
   url: Url;
   checkedAt: number;

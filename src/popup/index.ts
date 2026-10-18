@@ -1,9 +1,10 @@
-import { formatTime, isArchivable, normalizeUrl, timeAgo } from "@common/index";
+import { formatTime, isArchivable, log, normalizeUrl, timeAgo } from "@common/index";
 import { MessageType, Url } from "@common/types";
 import browser from "webextension-polyfill";
 
 const $app = document.getElementById("app") as HTMLDivElement;
 
+// TODO: use sendToBackground from messaging.ts
 const send = (type: MessageType, extra = {}) =>
   browser.runtime.sendMessage<any, any>({ type, ...extra });
 
@@ -52,6 +53,7 @@ async function initPopup() {
       (await browser.commands.getAll()).find((c) => c.name === "archive-page")?.shortcut || "";
   } catch {}
   state = await send("GET_STATE", { tabId: tab?.id });
+  log.warn(state);
   render();
   const stale =
     !state.status ||
@@ -92,6 +94,7 @@ async function doArchive() {
   flash = "";
   render();
   const r = await send("ARCHIVE_TAB", { tabId: tab!.id });
+  log.info(r);
   archiving = false;
   if (r?.ok) {
     state.status = r.status;
@@ -214,7 +217,7 @@ function currentCard() {
   children.push(
     createElement(
       "button",
-      { class: "primary", onclick: doArchive, disabled: archiving || !state.configured.archive },
+      { class: "primary", onclick: doArchive, disabled: archiving || !state.configured.server },
       archiving ? "Archiving…" : s?.archived ? "Archive new version" : "Archive this page",
       shortcut && !archiving
         ? createElement(
@@ -318,7 +321,7 @@ function pendingCard() {
 
 function render() {
   const out = [];
-  if (!hasPerm)
+  if (!hasPerm) {
     out.push(
       createElement(
         "div",
@@ -340,7 +343,8 @@ function render() {
         ),
       ),
     );
-  if (!state.configured.archive && !state.configured.pending && !state.configured.check)
+  }
+  if (!state.configured.server && !state.configured.pending && !state.configured.check) {
     out.push(
       createElement(
         "div",
@@ -358,8 +362,9 @@ function render() {
         ),
       ),
     );
-  else if (!state.configured.archive)
+  } else if (!state.configured.server) {
     out.push(errorBox("Archive endpoint is not configured. Check the preferences."));
+  }
   out.push(currentCard(), pendingCard());
   $app.replaceChildren(...out);
 }

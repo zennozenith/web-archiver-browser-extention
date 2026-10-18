@@ -1,6 +1,7 @@
 import browser from "webextension-polyfill";
 import { DEFAULT_SETTINGS, STORAGE_KEYS } from "./constants.ts";
 import { ExtensionSettings } from "./types.ts";
+import { log } from "./index.ts";
 
 /* ---------- session storage with in-memory fallback ---------- */
 const _mem = new Map<string, unknown>();
@@ -31,16 +32,19 @@ export async function saveSettings(
 }
 
 export async function session_storage_get<T>(key: string) {
+  // log.debug(`Get session key: ${key}`);
   if (browser.storage.session) return (await browser.storage.session.get(key))[key] as T;
   return _mem.get(key) as T;
 }
 
 export async function session_storage_set(key: string, val: unknown) {
+  log.debug(`Setting session key: ${key}`);
   if (browser.storage.session) await browser.storage.session.set({ [key]: val });
   else _mem.set(key, val);
 }
 
 export async function session_storage_delete(...keys: string[]) {
+  log.debug(`Deleting session key: ${keys}`);
   if (browser.storage.session) await browser.storage.session.remove(keys);
   else keys.forEach((k) => _mem.delete(k));
 }

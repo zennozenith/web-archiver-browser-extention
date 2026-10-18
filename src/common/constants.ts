@@ -2,9 +2,8 @@ import { ExtensionSettings } from "./types.ts";
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
   apiToken: "",
-  archiveUrl: "", // override; empty => derived from serverUrl
   autoCheck: true,
-  checkUrl: "",
+  checkUrl: { override: false, url: "" },
   directArchiveDelaySec: 2,
   directArchiveMode: "prompt", // prompt | auto
   fullPageScreenshot: false, // Firefox only
@@ -15,7 +14,7 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   jpegQuality: 85,
   pendingLimit: 200,
   pendingRefreshMinutes: 5, // 0 = off
-  pendingUrl: "",
+  pendingUrl: { override: false, url: "" },
   requestTimeoutSec: 120,
   screenshotFormat: "png", // png | jpeg
   serverUrl: "",
@@ -25,5 +24,4 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
 
 export const STORAGE_KEYS = {
   SETTINGS: "extension_settings",
-  COUNTER: "extension_counter",
 } as const;
