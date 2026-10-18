@@ -1,7 +1,6 @@
 import browser from "webextension-polyfill";
 
 import {
-  ArchiveTabPayload,
   BannerOpts,
   buildCheckUrl,
   ExtensionSettings,
@@ -26,6 +25,12 @@ import {
   ApiArchiveVersionsResponse,
   ApiCheckPendingResponse,
   PendingResponseInStorage,
+  MessageType,
+  MessagePayload,
+  MessageData,
+  MessageResponse,
+  Message,
+  State,
 } from "@common/index";
 import { collectPage, pageBanner } from "./page";
 import { createError, createOk, isStandardError } from "@common/error";
@@ -714,69 +719,86 @@ browser.webRequest.onHeadersReceived.addListener(
 
 ensureAlarm();
 
-// Message listener: returns a Promise (native promise in Firefox, polyfilled in Chrome)
-browser.runtime.onMessage.addListener(
-  // async (message: unknown, sender: browser.Runtime.MessageSender): Promise<MessageResponse> => {
-  async (message: unknown, sender: browser.Runtime.MessageSender): Promise<any> => {
-    // const msg = message as BaseMessage;
-    const msg = message as any;
-    log.debug(msg);
-    // console.log("[Background] Received message:", msg?.type, "from:", sender.id);
+type Handlers = {
+  [K in MessageType]: (
+    payload: MessagePayload<K>,
+    sender: browser.Runtime.MessageSender,
+  ) => MessageData<K> | Promise<MessageData<K>>;
+};
 
-    try {
-      switch (msg.type) {
-        case "GET_STATE": {
-          const extentionSettings = await getExtentionSettings();
-          const endpoint = getEndpoint(extentionSettings);
-          const { pending } = await browser.storage.local.get({ pending: null });
-          return {
-            ok: true,
-            configured: {
-              server: endpoint.server !== "",
-              pending: endpoint.pending !== "",
-              check: endpoint.check !== "",
-            },
-            status:
-              msg.tabId != null
-                ? ((await session_storage_get("status:" + msg.tabId)) ?? null)
-                : null,
-            archiveError:
-              msg.tabId != null
-                ? ((await session_storage_get("archiveError:" + msg.tabId)) ?? null)
-                : null,
-            pending,
-            pendingLimit: extentionSettings.pendingLimit,
-          };
-        }
-        case "CHECK_TAB":
-          return { ok: true, status: await checkArchiveVersion(msg.tabId) };
-        case "ARCHIVE_TAB": {
-          const payload = msg as ArchiveTabPayload;
-          return await archiveWithFeedback(payload.tabId, { toast: false });
-        }
-        case "ARCHIVE_FROM_PAGE":
-          return archiveWithFeedback(sender.tab!.id as Int, { toast: false });
-        case "REFRESH_PENDING":
-          await refreshPending();
-          return { ok: true };
-        case "OPEN_AND_ARCHIVE":
-          await openAndArchive(msg.url);
-          return { ok: true };
-        case "CLEAR_ARCHIVE_ERROR":
-          await session_storage_delete("archiveError:" + msg.tabId);
-          applyStatusBadge(msg.tabId, await session_storage_get("status:" + msg.tabId));
-          return { ok: true };
-        default:
-          return {
-            success: false,
-            error: `Unknown message type: ${msg?.type}`,
-          };
+/** Requires a handler for every message type (compile error if one is missing). */
+export function registerHandlers(handlers: Handlers): void {
+  browser.runtime.onMessage.addListener((raw: unknown, sender: browser.Runtime.MessageSender) => {
+    log.debug("Background on message", raw);
+
+    if (!isMessage(raw, handlers)) return undefined; // not ours
+
+    const handler = handlers[raw.type] as (
+      payload: unknown,
+      sender: browser.Runtime.MessageSender,
+    ) => unknown;
+
+    return (async (): Promise<MessageResponse<unknown>> => {
+      try {
+        return { success: true, data: await handler(raw.payload, sender) };
+      } catch (err) {
+        log.error(`message:${raw.type} handler failed`, err);
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+        };
       }
-    } catch (err) {
-      return {
-        success: false,
-        error: err instanceof Error ? err.message : String(err),
-      };
-    }
+    })();
+  });
+}
+
+function isMessage(raw: unknown, handlers: Handlers): raw is Message {
+  return (
+    typeof raw === "object" &&
+    raw !== null &&
+    "type" in raw &&
+    typeof raw.type === "string" &&
+    Object.hasOwn(handlers, raw.type)
+  );
+}
+
+registerHandlers({
+  GET_STATE: async ({ tabId }) => {
+    const extentionSettings = await getExtentionSettings();
+    const endpoint = getEndpoint(extentionSettings);
+    const { pending } = (await browser.storage.local.get({ pending: null })) as {
+      pending: PendingResponseInStorage;
+    };
+    return {
+      ok: true,
+      configured: {
+        server: endpoint.server !== "",
+        pending: endpoint.pending !== "",
+        check: endpoint.check !== "",
+      },
+      status: tabId != null ? ((await session_storage_get("status:" + tabId)) ?? null) : null,
+      archiveError:
+        tabId != null ? ((await session_storage_get("archiveError:" + tabId)) ?? null) : null,
+      pending,
+      pendingLimit: extentionSettings.pendingLimit,
+    } satisfies State;
   },
-);
+  ARCHIVE_TAB: async ({ tabId }) => {
+    return await archiveWithFeedback(tabId, { toast: false });
+  },
+  CHECK_ARCHIVE: async ({ tabId }) => await checkArchiveVersion(tabId),
+  ARCHIVE_FROM_PAGE: async (_, sender) =>
+    await archiveWithFeedback(sender.tab!.id as Int, { toast: false }),
+  REFRESH_PENDING: async () => {
+    const t = await refreshPending();
+    return { ok: t === null ? false : t.ok };
+  },
+  OPEN_AND_ARCHIVE: async ({ url }) => {
+    await openAndArchive(url);
+  },
+  CLEAR_ARCHIVE_ERROR: async ({ tabId }) => {
+    await session_storage_delete(`archiveError:${tabId}`);
+    applyStatusBadge(tabId, await session_storage_get(`status:${tabId}`));
+    return { ok: true };
+  },
+});

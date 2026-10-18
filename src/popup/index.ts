@@ -1,58 +1,392 @@
-import { formatTime, isArchivable, log, normalizeUrl, timeAgo } from "@common/index";
-import { MessageType, Url } from "@common/types";
+import {
+  formatTime,
+  isArchivable,
+  log,
+  normalizeUrl,
+  sendToBackground,
+  timeAgo,
+} from "@common/index";
+import type { Int, Url } from "@common/types";
 import browser from "webextension-polyfill";
 
-const $app = document.getElementById("app") as HTMLDivElement;
+// DOM References
+const noticePermissionEl = document.getElementById("notice-permission") as HTMLDivElement;
+const btnGrantPermission = document.getElementById("btn-grant-permission") as HTMLButtonElement;
+const noticeNoServerEl = document.getElementById("notice-no-server") as HTMLDivElement;
+const btnOpenOptions = document.getElementById("btn-open-options") as HTMLButtonElement;
+const errorEndpointEl = document.getElementById("error-endpoint") as HTMLDivElement;
 
-// TODO: use sendToBackground from messaging.ts
-const send = (type: MessageType, extra = {}) =>
-  browser.runtime.sendMessage<any, any>({ type, ...extra });
+// Current Section DOM Nodes
+const currentUnarchivable = document.getElementById("current-unarchivable") as HTMLDivElement;
+const currentMeta = document.getElementById("current-meta") as HTMLDivElement;
+const currentTitle = document.getElementById("current-title") as HTMLDivElement;
+const currentUrl = document.getElementById("current-url") as HTMLDivElement;
+const currentStatusPill = document.getElementById("current-status-pill") as HTMLSpanElement;
+const btnRecheck = document.getElementById("btn-recheck") as HTMLButtonElement;
+const currentErrorContainer = document.getElementById("current-error-container") as HTMLDivElement;
+const currentVersionsList = document.getElementById("current-versions-list") as HTMLUListElement;
+const currentVersionsOverflow = document.getElementById(
+  "current-versions-overflow",
+) as HTMLDivElement;
+const currentLastArchived = document.getElementById("current-last-archived") as HTMLDivElement;
+const currentFlash = document.getElementById("current-flash") as HTMLDivElement;
+const btnArchive = document.getElementById("btn-archive") as HTMLButtonElement;
+const btnArchiveText = document.getElementById("btn-archive-text") as HTMLSpanElement;
+const btnArchiveShortcut = document.getElementById("btn-archive-shortcut") as HTMLSpanElement;
 
-function createElement(tag: string, props: Record<string, any> = {}, ...kids: any[]) {
-  const el = document.createElement(tag);
-  for (const [k, v] of Object.entries(props || {})) {
-    if (k === "class") el.className = v;
-    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
-    else if (v !== false && v != null) el.setAttribute(k, v === true ? "" : v);
-  }
-  for (const k of kids.flat())
-    if (k != null && k !== false) el.append(k.nodeType ? k : document.createTextNode(k));
-  return el;
-}
+// Pending Section DOM Nodes
+const pendingHeading = document.getElementById("pending-heading") as HTMLHeadingElement;
+const pendingFetchedTime = document.getElementById("pending-fetched-time") as HTMLSpanElement;
+const btnRefreshPending = document.getElementById("btn-refresh-pending") as HTMLButtonElement;
+const refreshIcon = document.getElementById("refresh-icon") as HTMLSpanElement;
+const pendingUnconfigured = document.getElementById("pending-unconfigured") as HTMLDivElement;
+const pendingErrorContainer = document.getElementById("pending-error-container") as HTMLDivElement;
+const pendingEmpty = document.getElementById("pending-empty") as HTMLDivElement;
+const pendingList = document.getElementById("pending-list") as HTMLUListElement;
+const pendingOverflow = document.getElementById("pending-overflow") as HTMLDivElement;
 
-const openTab = (url: Url) => {
+function openTab(url: Url) {
   browser.tabs.create({ url });
   window.close();
-};
+}
 
-let tab: browser.Tabs.Tab | null = null,
+let tab: browser.Tabs.Tab,
   state: any = null,
-  hasPerm = true,
+  hasPermission = true,
   shortcut = "",
   checking = false,
   archiving = false,
   refreshing = false,
   flash = "";
 
-async function initPopup() {
-  const optionsButton = document.getElementById("btn-options");
-  if (optionsButton === null) return;
+async function recheck() {
+  checking = true;
+  render();
+  const messageResponse = await sendToBackground("CHECK_ARCHIVE", { tabId: tab.id as Int });
+  checking = false;
 
-  optionsButton.onclick = () => {
-    browser.runtime.openOptionsPage();
-    window.close();
+  if (messageResponse.success === true) {
+    state.status = messageResponse.data;
+  }
+  render();
+}
+
+async function doRefresh() {
+  refreshing = true;
+  render();
+  await sendToBackground("REFRESH_PENDING", undefined);
+
+  state = {
+    ...state,
+    ...(await sendToBackground("GET_STATE", { tabId: tab.id as Int })),
   };
+  refreshing = false;
+  render();
+}
+
+async function doArchive() {
+  archiving = true;
+  flash = "";
+  render();
+  const result = await sendToBackground("ARCHIVE_TAB", { tabId: tab.id as Int });
+  log.info(result);
+  archiving = false;
+
+  if (result.success === true && result.data.ok === true) {
+    state.status = result.data.data.status;
+    state.archiveError = null;
+    flash =
+      "Archived ✓" +
+      (result.data.data.warnings.length
+        ? ` (${result.data.data.warnings.length} warning${result.data.data.warnings.length > 1 ? "s" : ""}: ${result.data.data.warnings.join("; ")})`
+        : "");
+  } else if (result.success === false) {
+    state.archiveError = { message: result.error || "Unknown error" };
+  }
+
+  state = {
+    ...state,
+    ...(await sendToBackground("GET_STATE", { tabId: tab.id as Int })),
+    status: state.status,
+  };
+  render();
+}
+
+// Replicating your errorBox builder using vanilla DOM element generation
+function errorBox(msg: string, onClose: () => void = () => {}) {
+  const errDiv = document.createElement("div");
+  errDiv.className = "error";
+
+  const span = document.createElement("span");
+  span.textContent = msg;
+  errDiv.appendChild(span);
+
+  if (onClose) {
+    const btn = document.createElement("button");
+    btn.textContent = "✕";
+    btn.title = "Dismiss";
+    btn.addEventListener("click", onClose);
+    errDiv.appendChild(btn);
+  }
+  return errDiv;
+}
+
+function render() {
+  // --- 1. Global Notice States ---
+  noticePermissionEl.classList.toggle("hidden", hasPermission);
+
+  const isNotConfiguredAtAll =
+    !state.configured.server && !state.configured.pending && !state.configured.check;
+  noticeNoServerEl.classList.toggle("hidden", !isNotConfiguredAtAll);
+
+  const isMissingServer = !state.configured.server && !isNotConfiguredAtAll;
+  errorEndpointEl.classList.toggle("hidden", !isMissingServer);
+
+  // --- 2. Current Card Logic (`currentCard()`) ---
+  const archivable = tab && isArchivable(tab.url);
+  currentUnarchivable.classList.toggle("hidden", archivable);
+  currentMeta.classList.toggle("hidden", !archivable);
+
+  if (archivable) {
+    currentTitle.textContent = tab.title || tab.url || "No Title";
+    currentTitle.title = tab.title || tab.url || "No Title";
+    currentUrl.textContent = tab.url || "No Url";
+    currentUrl.title = tab.url || "No Url";
+
+    // Status Pill & Recheck Button
+    const s = state.status;
+    if (checking) {
+      currentStatusPill.className = "pill muted";
+      currentStatusPill.textContent = "Checking…";
+    } else if (s?.state === "ok") {
+      if (s.archived) {
+        const count = s.count || s.versions?.length || 1;
+        currentStatusPill.className = "pill ok";
+        currentStatusPill.textContent = `Archived · ${count} version${count === 1 ? "" : "s"}`;
+      } else {
+        currentStatusPill.className = "pill warn";
+        currentStatusPill.textContent = "Not archived";
+      }
+    } else if (s?.state === "error") {
+      currentStatusPill.className = "pill err";
+      currentStatusPill.textContent = "Check failed";
+    } else {
+      currentStatusPill.className = "pill muted";
+      currentStatusPill.textContent = state.configured.check
+        ? "Unknown"
+        : "Status check not configured";
+    }
+
+    btnRecheck.classList.toggle("hidden", !state.configured.check);
+    btnRecheck.disabled = checking;
+
+    // Current Error Box
+    currentErrorContainer.innerHTML = "";
+    if (s?.state === "error" && !checking && s.error) {
+      currentErrorContainer.appendChild(errorBox(s.error));
+    }
+
+    // Versions List
+    currentVersionsList.innerHTML = "";
+    if (s?.state === "ok" && s.versions?.length) {
+      currentVersionsList.classList.remove("hidden");
+      const n = s.versions.length;
+      const total = s.count || n;
+
+      s.versions.slice(0, 20).forEach((v: any, i: any) => {
+        const li = document.createElement("li");
+
+        if (v.url) {
+          const a = document.createElement("a");
+          a.textContent = `v${total - i}`;
+          a.addEventListener("click", () => openTab(v.url));
+          li.appendChild(a);
+        } else {
+          const span = document.createElement("span");
+          span.textContent = `v${v.id ?? total - i}`;
+          li.appendChild(span);
+        }
+
+        const timeSpan = document.createElement("span");
+        timeSpan.textContent = formatTime(v.time);
+        li.appendChild(timeSpan);
+
+        const agoSpan = document.createElement("span");
+        agoSpan.className = "muted";
+        agoSpan.textContent = timeAgo(v.time);
+        li.appendChild(agoSpan);
+
+        currentVersionsList.appendChild(li);
+      });
+
+      if (total > 20) {
+        currentVersionsOverflow.classList.remove("hidden");
+        currentVersionsOverflow.textContent = `Showing newest 20 of ${total}`;
+      } else {
+        currentVersionsOverflow.classList.add("hidden");
+      }
+    } else {
+      currentVersionsList.classList.add("hidden");
+      currentVersionsOverflow.classList.add("hidden");
+    }
+
+    // Last Archived notice
+    if (!(s?.state === "ok" && s.versions?.length) && s?.state === "ok" && s.archived && s.last) {
+      currentLastArchived.classList.remove("hidden");
+      currentLastArchived.textContent = `Last archived ${formatTime(s.last)} (${timeAgo(s.last)})`;
+    } else {
+      currentLastArchived.classList.add("hidden");
+    }
+  }
+
+  // Archive Error Handling
+  if (state.archiveError) {
+    currentErrorContainer.innerHTML = "";
+    currentErrorContainer.appendChild(
+      errorBox("Archive failed: " + state.archiveError.message, async () => {
+        state.archiveError = null;
+        render();
+      }),
+    );
+  }
+
+  // Flash Message
+  if (flash && !state.archiveError) {
+    currentFlash.classList.remove("hidden");
+    currentFlash.textContent = flash;
+  } else {
+    currentFlash.classList.add("hidden");
+  }
+
+  // Archive Button states
+  btnArchive.disabled = archiving || !state.configured.server;
+  btnArchiveText.textContent = archiving
+    ? "Archiving…"
+    : state.status?.archived
+      ? "Archive new version"
+      : "Archive this page";
+
+  if (shortcut && !archiving) {
+    btnArchiveShortcut.textContent = `  (${shortcut})`;
+  } else {
+    btnArchiveShortcut.textContent = "";
+  }
+
+  // --- 3. Pending Card Logic (`pendingCard()`) ---
+  const p = state.pending;
+  pendingHeading.textContent = `Pending${p?.total ? ` (\${p.total})` : ""}`;
+
+  if (p?.fetchedAt) {
+    pendingFetchedTime.textContent = timeAgo(p.fetchedAt);
+    pendingFetchedTime.title = formatTime(p.fetchedAt);
+    pendingFetchedTime.classList.remove("hidden");
+  } else {
+    pendingFetchedTime.classList.add("hidden");
+  }
+
+  btnRefreshPending.disabled = refreshing || !state.configured.pending;
+  refreshIcon.classList.toggle("spin", refreshing);
+
+  const isPendingConfigured = state.configured.pending;
+  pendingUnconfigured.classList.toggle("hidden", isPendingConfigured);
+
+  if (!isPendingConfigured) {
+    pendingErrorContainer.innerHTML = "";
+    pendingEmpty.classList.add("hidden");
+    pendingList.innerHTML = "";
+    pendingOverflow.classList.add("hidden");
+    return;
+  }
+
+  // Pending Error
+  pendingErrorContainer.innerHTML = "";
+  if (p?.error) {
+    pendingErrorContainer.appendChild(errorBox("Pending list: " + p.error));
+  }
+
+  // Pending Empty Check
+  const isEmpty = p && !p.items?.length && !p.error;
+  pendingEmpty.classList.toggle("hidden", !isEmpty);
+
+  // Pending Items List
+  pendingList.innerHTML = "";
+  if (p?.items?.length) {
+    p.items.forEach((it: any) => {
+      let label = it.title;
+      try {
+        const u = new URL(it.url);
+        label = label || u.hostname + u.pathname;
+      } catch {}
+
+      const li = document.createElement("li");
+
+      const growDiv = document.createElement("div");
+      growDiv.className = "grow";
+
+      const titleDiv = document.createElement("div");
+      titleDiv.className = "title";
+      titleDiv.title = it.title || it.url;
+      titleDiv.textContent = label;
+      growDiv.appendChild(titleDiv);
+
+      const urlDiv = document.createElement("div");
+      urlDiv.className = "url";
+      urlDiv.title = it.url;
+      urlDiv.textContent = it.url + (it.addedAt ? ` · ${timeAgo(it.addedAt)}` : "");
+      growDiv.appendChild(urlDiv);
+
+      li.appendChild(growDiv);
+
+      const actionBtn = document.createElement("button");
+      actionBtn.className = "sm";
+      actionBtn.title = "Open in a new tab and archive";
+      actionBtn.textContent = "Archive";
+      actionBtn.addEventListener("click", async () => {
+        await sendToBackground("OPEN_AND_ARCHIVE", { url: it.url });
+        window.close();
+      });
+      li.appendChild(actionBtn);
+
+      pendingList.appendChild(li);
+    });
+  }
+
+  // Overflow notice
+  const hasOverflow = p?.total > p?.items?.length;
+  pendingOverflow.classList.toggle("hidden", !hasOverflow);
+  if (hasOverflow) {
+    pendingOverflow.textContent = `+${p.total - p.items.length} more not shown (see list limit in preferences)`;
+  }
+}
+
+// Global Event Listeners Wiring
+btnGrantPermission.addEventListener("click", async () => {
+  hasPermission = true;
+  render();
+});
+
+btnOpenOptions.addEventListener("click", () => {
+  browser.runtime.openOptionsPage();
+  window.close();
+});
+
+btnRecheck.addEventListener("click", recheck);
+btnRefreshPending.addEventListener("click", doRefresh);
+btnArchive.addEventListener("click", doArchive);
+
+document.addEventListener("DOMContentLoaded", async () => {
+  // try {
   [tab] = await browser.tabs.query({ active: true, currentWindow: true });
   try {
-    hasPerm = await browser.permissions.contains({ origins: ["<all_urls>"] });
+    hasPermission = await browser.permissions.contains({ origins: ["<all_urls>"] });
   } catch {
-    hasPerm = true;
+    hasPermission = true;
   }
   try {
     shortcut =
       (await browser.commands.getAll()).find((c) => c.name === "archive-page")?.shortcut || "";
   } catch {}
-  state = await send("GET_STATE", { tabId: tab?.id });
+  state = await sendToBackground("GET_STATE", { tabId: tab.id as Int });
   log.warn(state);
   render();
   const stale =
@@ -71,305 +405,9 @@ async function initPopup() {
       render();
     }
   });
-}
 
-async function recheck() {
-  checking = true;
-  render();
-  const r = await send("CHECK_TAB", { tabId: tab!.id });
-  checking = false;
-  if (r?.status) state.status = r.status;
-  render();
-}
-async function doRefresh() {
-  refreshing = true;
-  render();
-  await send("REFRESH_PENDING");
-  state = { ...state, ...(await send("GET_STATE", { tabId: tab?.id })) };
-  refreshing = false;
-  render();
-}
-async function doArchive() {
-  archiving = true;
-  flash = "";
-  render();
-  const r = await send("ARCHIVE_TAB", { tabId: tab!.id });
-  log.info(r);
-  archiving = false;
-  if (r?.ok) {
-    state.status = r.status;
-    state.archiveError = null;
-    flash =
-      "Archived ✓" +
-      (r.warnings?.length
-        ? ` (${r.warnings.length} warning${r.warnings.length > 1 ? "s" : ""}: ${r.warnings.join("; ")})`
-        : "");
-  } else state.archiveError = { message: r?.error || "Unknown error" };
-  state = { ...state, ...(await send("GET_STATE", { tabId: tab!.id })), status: state.status };
-  render();
-}
-
-const errorBox = (msg: any, onClose?: any) =>
-  createElement(
-    "div",
-    { class: "error" },
-    createElement("span", {}, msg),
-    onClose && createElement("button", { onclick: onClose, title: "Dismiss" }, "✕"),
-  );
-
-function currentCard() {
-  const children = [createElement("h2", {}, "Current page")];
-  if (!tab || !isArchivable(tab.url)) {
-    children.push(
-      createElement(
-        "div",
-        { class: "muted" },
-        "This page can't be archived (only http/https pages).",
-      ),
-    );
-    return createElement("section", { class: "card" }, children);
-  }
-  children.push(
-    createElement(
-      "div",
-      {},
-      createElement("div", { class: "title", title: tab.title }, tab.title || tab.url),
-      createElement("div", { class: "url", title: tab.url }, tab.url),
-    ),
-  );
-  const s = state.status;
-  const row = [];
-  if (checking) row.push(createElement("span", { class: "pill muted" }, "Checking…"));
-  else if (s?.state === "ok")
-    row.push(
-      s.archived
-        ? createElement(
-            "span",
-            { class: "pill ok" },
-            `Archived · ${s.count || s.versions.length || 1} version${(s.count || s.versions.length) === 1 ? "" : "s"}`,
-          )
-        : createElement("span", { class: "pill warn" }, "Not archived"),
-    );
-  else if (s?.state === "error")
-    row.push(createElement("span", { class: "pill err" }, "Check failed"));
-  else
-    row.push(
-      createElement(
-        "span",
-        { class: "pill muted" },
-        state.configured.check ? "Unknown" : "Status check not configured",
-      ),
-    );
-  if (state.configured.check)
-    row.push(
-      createElement(
-        "button",
-        { class: "sm", onclick: recheck, disabled: checking, title: "Re-check archive status" },
-        "↻",
-      ),
-    );
-  children.push(createElement("div", { class: "row" }, row));
-  if (s?.state === "error" && !checking) children.push(errorBox(s.error));
-  if (s?.state === "ok" && s.versions?.length) {
-    const n = s.versions.length,
-      total = s.count || n;
-    children.push(
-      createElement(
-        "ul",
-        { class: "versions" },
-        s.versions
-          .slice(0, 20)
-          .map((v: any, i: any) =>
-            createElement(
-              "li",
-              {},
-              v.url
-                ? createElement("a", { onclick: () => openTab(v.url) }, `v${total - i}`)
-                : createElement("span", {}, `v${v.id ?? total - i}`),
-              createElement("span", {}, formatTime(v.time)),
-              createElement("span", { class: "muted" }, timeAgo(v.time)),
-            ),
-          ),
-      ),
-    );
-    if (total > 20)
-      children.push(
-        createElement("div", { class: "muted small" }, `Showing newest 20 of ${total}`),
-      );
-  } else if (s?.state === "ok" && s.archived && s.last)
-    children.push(
-      createElement(
-        "div",
-        { class: "muted small" },
-        `Last archived ${formatTime(s.last)} (${timeAgo(s.last)})`,
-      ),
-    );
-  if (state.archiveError)
-    children.push(
-      errorBox("Archive failed: " + state.archiveError.message, async () => {
-        await send("CLEAR_ARCHIVE_ERROR", { tabId: tab!.id });
-        state.archiveError = null;
-        render();
-      }),
-    );
-  if (flash && !state.archiveError)
-    children.push(createElement("div", { class: "success" }, flash));
-  children.push(
-    createElement(
-      "button",
-      { class: "primary", onclick: doArchive, disabled: archiving || !state.configured.server },
-      archiving ? "Archiving…" : s?.archived ? "Archive new version" : "Archive this page",
-      shortcut && !archiving
-        ? createElement(
-            "span",
-            { class: "small", style: "font-weight:400;opacity:.85" },
-            `  (${shortcut})`,
-          )
-        : null,
-    ),
-  );
-  return createElement("section", { class: "card" }, children);
-}
-
-function pendingCard() {
-  const p = state.pending;
-  const head = createElement(
-    "div",
-    { class: "row" },
-    createElement("h2", {}, `Pending${p?.total ? ` (${p.total})` : ""}`),
-    createElement(
-      "div",
-      { class: "row" },
-      p?.fetchedAt
-        ? createElement(
-            "span",
-            { class: "muted small", title: formatTime(p.fetchedAt) },
-            timeAgo(p.fetchedAt),
-          )
-        : null,
-      createElement(
-        "button",
-        {
-          class: "sm",
-          onclick: doRefresh,
-          disabled: refreshing || !state.configured.pending,
-          title: "Refresh pending list",
-        },
-        createElement("span", { class: refreshing ? "spin" : "" }, "↻"),
-      ),
-    ),
-  );
-  const kids = [head];
-  if (!state.configured.pending)
-    kids.push(createElement("div", { class: "muted" }, "Pending URL endpoint not configured."));
-  else {
-    if (p?.error) kids.push(errorBox("Pending list: " + p.error));
-    if (p && !p.items.length && !p.error)
-      kids.push(createElement("div", { class: "muted" }, "Nothing pending 🎉"));
-    if (p?.items.length) {
-      kids.push(
-        createElement(
-          "ul",
-          { class: "pending" },
-          p.items.map((it: any) => {
-            let label = it.title;
-            try {
-              const u = new URL(it.url);
-              label = label || u.hostname + u.pathname;
-            } catch {}
-            return createElement(
-              "li",
-              {},
-              createElement(
-                "div",
-                { class: "grow" },
-                createElement("div", { class: "title", title: it.title || it.url }, label),
-                createElement(
-                  "div",
-                  { class: "url", title: it.url },
-                  it.url + (it.addedAt ? ` · ${timeAgo(it.addedAt)}` : ""),
-                ),
-              ),
-              createElement(
-                "button",
-                {
-                  class: "sm",
-                  title: "Open in a new tab and archive",
-                  onclick: async () => {
-                    await send("OPEN_AND_ARCHIVE", { url: it.url });
-                    window.close();
-                  },
-                },
-                "Archive",
-              ),
-            );
-          }),
-        ),
-      );
-      if (p.total > p.items.length)
-        kids.push(
-          createElement(
-            "div",
-            { class: "muted small" },
-            `+${p.total - p.items.length} more not shown (see list limit in preferences)`,
-          ),
-        );
-    }
-  }
-  return createElement("section", { class: "card" }, kids);
-}
-
-function render() {
-  const out = [];
-  if (!hasPerm) {
-    out.push(
-      createElement(
-        "div",
-        { class: "notice" },
-        createElement(
-          "div",
-          {},
-          "Site access hasn't been granted yet. It's needed to read pages and request headers.",
-        ),
-        createElement(
-          "button",
-          {
-            onclick: async () => {
-              hasPerm = await browser.permissions.request({ origins: ["<all_urls>"] });
-              render();
-            },
-          },
-          "Grant access",
-        ),
-      ),
-    );
-  }
-  if (!state.configured.server && !state.configured.pending && !state.configured.check) {
-    out.push(
-      createElement(
-        "div",
-        { class: "notice" },
-        createElement("div", {}, "No server configured yet."),
-        createElement(
-          "button",
-          {
-            onclick: () => {
-              browser.runtime.openOptionsPage();
-              window.close();
-            },
-          },
-          "Open preferences",
-        ),
-      ),
-    );
-  } else if (!state.configured.server) {
-    out.push(errorBox("Archive endpoint is not configured. Check the preferences."));
-  }
-  out.push(currentCard(), pendingCard());
-  $app.replaceChildren(...out);
-}
-
-initPopup().catch((e) => {
-  console.error(e);
-  $app.replaceChildren(errorBox("Popup error: " + e.message));
+  // } catch (e) {
+  //   $app.replaceChildren(errorBox("Popup error: " + e.message));
+  //   console.error(e);
+  // }
 });

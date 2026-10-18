@@ -1,5 +1,5 @@
 import { WebRequest } from "webextension-polyfill";
-import { ApiArchiveVersionsResponse } from "./reqwest";
+import { ApiArchiveVersionsResponse, PendingResponseInStorage } from "./reqwest";
 
 export type Int = number;
 export type Url = string;
@@ -29,29 +29,10 @@ export interface Err<E> {
 
 export type Result<T, E = unknown> = Ok<T> | Err<E>;
 
-export type MessageType =
-  | "ARCHIVE_TAB"
-  | "CHECK_TAB"
-  | "CHECK_TAB"
-  | "GET_STATE"
-  | "ARCHIVE_FROM_PAGE"
-  | "REFRESH_PENDING"
-  | "OPEN_AND_ARCHIVE"
-  | "CLEAR_ARCHIVE_ERROR";
-
-export interface BaseMessage<T = unknown> {
-  type: MessageType;
-  payload?: T;
-}
-
 export interface Endpoint {
   server: Url;
   pending: Url;
   check: Url;
-}
-
-export interface ArchiveTabPayload {
-  tabId: Int;
 }
 
 export interface HeadersDetails {
@@ -72,12 +53,6 @@ export interface ReqeustOptions {
   headers?: Record<string, string>;
   token?: string;
   timeoutMs?: Int;
-}
-
-export interface MessageResponse<T = unknown> {
-  success: boolean;
-  data?: T;
-  error?: string;
 }
 
 export interface ExtensionSettings {
@@ -156,6 +131,18 @@ export interface OkStatus extends ApiArchiveVersionsResponse {
 
 export type Status = UnsupportedStatus | UnconfiguredStatus | ErrorStatus | OkStatus;
 
+export interface State {
+  ok: true;
+  configured: {
+    server: boolean;
+    pending: boolean;
+    check: boolean;
+  };
+  status: Status | null;
+  archiveError: { message: string; time: number } | null;
+  pending: PendingResponseInStorage;
+  pendingLimit: number;
+}
 // export interface Status {
 //   state: "unsupported" | "unconfigured" | "error";
 //   archived: boolean;
