@@ -174,7 +174,7 @@ async function checkArchiveVersion(tabId: Int): Promise<Result<Status>> {
   if (!isArchivable(tab.url)) {
     await session_storage_delete(`status:${tabId}`);
     applyStatusBadge(tabId, null);
-    return createOk({ state: "unsupported", url: tab.url as Url });
+    return createOk({ state: "unsupported", url: tab.url as Url, checkedAt: Date.now() });
   }
 
   const extentionSettings = await getExtentionSettings();
@@ -182,7 +182,7 @@ async function checkArchiveVersion(tabId: Int): Promise<Result<Status>> {
   const url = normalizeUrl(tab.url as Url);
 
   if (!endpoint.check) {
-    const status: Status = { state: "unconfigured", url };
+    const status: Status = { state: "unconfigured", url, checkedAt: Date.now() };
     await session_storage_set(`status:${tabId}`, status);
     applyStatusBadge(tabId, status);
     return createOk(status);
@@ -729,7 +729,7 @@ type Handlers = {
 /** Requires a handler for every message type (compile error if one is missing). */
 export function registerHandlers(handlers: Handlers): void {
   browser.runtime.onMessage.addListener((raw: unknown, sender: browser.Runtime.MessageSender) => {
-    log.debug("Background on message", raw);
+    log.debug("On message", raw);
 
     if (!isMessage(raw, handlers)) return undefined; // not ours
 

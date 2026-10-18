@@ -1,56 +1,6 @@
 import browser from "webextension-polyfill";
 import { Int, log, Result, State, Status, Url } from "./index.ts";
 
-// interface BaseMessage<T = unknown> {
-//   type: MessageType;
-//   payload: T;
-// }
-
-// export interface ErrorMessageResponse {
-//   success: false;
-//   error: string;
-// }
-
-// export interface OkMessageResponse<T = unknown> {
-//   success: true;
-//   data: T;
-// }
-// export type MessageResponse<T> = OkMessageResponse<T> | ErrorMessageResponse;
-
-// export type Message = {
-//   GET_STATE: [BaseMessage<{ tabId: Int }>, MessageResponse<{}>];
-//   ARCHIVE_TAB: [BaseMessage<{ tabId: Int }>, MessageResponse<{}>];
-//   CHECK_ARCHIVE: [BaseMessage<{ tabId: Int }>, MessageResponse<Result<Status>>];
-//   ARCHIVE_FROM_PAGE: [BaseMessage<{ tabId: Int }>, MessageResponse<{}>];
-//   REFRESH_PENDING: [BaseMessage<undefined>, MessageResponse<{}>];
-//   OPEN_AND_ARCHIVE: [BaseMessage<{ url: Url }>, MessageResponse<{}>];
-//   CLEAR_ARCHIVE_ERROR: [BaseMessage<{ tabId: Int }>, MessageResponse<{}>];
-// };
-
-// export type MessageType = keyof Message;
-
-// /**
-//  * Sends a strongly-typed message to the background service worker/script
-//  */
-// export async function sendToBackground<T extends MessageType>(
-//   message: Message[T][0],
-// ): Promise<Message[T][1]> {
-//   try {
-//     const response = (await browser.runtime.sendMessage(message)) as Message[T][1];
-//     if (response !== null && response !== undefined) {
-//       return { success: true, data: response };
-//     }
-//     log.error(`message:${message.type} No Response received`);
-//     return { success: false, error: "No response received" };
-//   } catch (err) {
-//     log.error(`message:${message.type} send failed`, err);
-//     return {
-//       success: false,
-//       error: err instanceof Error ? err.message : String(err),
-//     };
-//   }
-// }
-
 export type Empty = Record<string, never>;
 
 /**

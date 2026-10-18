@@ -109,11 +109,13 @@ export interface BannerOpts {
 export interface UnsupportedStatus {
   state: "unsupported";
   url: Url;
+  checkedAt: number;
 }
 
 export interface UnconfiguredStatus {
   state: "unconfigured";
   url: Url;
+  checkedAt: number;
 }
 
 export interface ErrorStatus {
@@ -127,6 +129,14 @@ export interface OkStatus extends ApiArchiveVersionsResponse {
   state: "ok";
   url: Url;
   checkedAt: number;
+  archived: boolean;
+  count: number;
+  versions: {
+    id: string;
+    time: number;
+    url: Url;
+  }[];
+  last?: number;
 }
 
 export type Status = UnsupportedStatus | UnconfiguredStatus | ErrorStatus | OkStatus;

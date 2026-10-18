@@ -3,10 +3,11 @@ import {
   isArchivable,
   log,
   normalizeUrl,
+  PendingResponseInStorage,
   sendToBackground,
   timeAgo,
 } from "@common/index";
-import type { Int, Url } from "@common/types";
+import type { Int, State, Url } from "@common/types";
 import browser from "webextension-polyfill";
 
 // DOM References
@@ -51,7 +52,7 @@ function openTab(url: Url) {
 }
 
 let tab: browser.Tabs.Tab,
-  state: any = null,
+  state: State,
   hasPermission = true,
   shortcut = "",
   checking = false,
@@ -65,8 +66,8 @@ async function recheck() {
   const messageResponse = await sendToBackground("CHECK_ARCHIVE", { tabId: tab.id as Int });
   checking = false;
 
-  if (messageResponse.success === true) {
-    state.status = messageResponse.data;
+  if (messageResponse.success === true && messageResponse.data.ok === true) {
+    state.status = messageResponse.data.data;
   }
   render();
 }
@@ -101,7 +102,7 @@ async function doArchive() {
         ? ` (${result.data.data.warnings.length} warning${result.data.data.warnings.length > 1 ? "s" : ""}: ${result.data.data.warnings.join("; ")})`
         : "");
   } else if (result.success === false) {
-    state.archiveError = { message: result.error || "Unknown error" };
+    state.archiveError = { message: result.error || "Unknown error", time: Date.now() };
   }
 
   state = {
@@ -112,7 +113,6 @@ async function doArchive() {
   render();
 }
 
-// Replicating your errorBox builder using vanilla DOM element generation
 function errorBox(msg: string, onClose: () => void = () => {}) {
   const errDiv = document.createElement("div");
   errDiv.className = "error";
@@ -131,8 +131,7 @@ function errorBox(msg: string, onClose: () => void = () => {}) {
   return errDiv;
 }
 
-function render() {
-  // --- 1. Global Notice States ---
+function renderNotice() {
   noticePermissionEl.classList.toggle("hidden", hasPermission);
 
   const isNotConfiguredAtAll =
@@ -141,8 +140,9 @@ function render() {
 
   const isMissingServer = !state.configured.server && !isNotConfiguredAtAll;
   errorEndpointEl.classList.toggle("hidden", !isMissingServer);
+}
 
-  // --- 2. Current Card Logic (`currentCard()`) ---
+function renderCurrentPage() {
   const archivable = tab && isArchivable(tab.url);
   currentUnarchivable.classList.toggle("hidden", archivable);
   currentMeta.classList.toggle("hidden", !archivable);
@@ -260,19 +260,22 @@ function render() {
 
   // Archive Button states
   btnArchive.disabled = archiving || !state.configured.server;
-  btnArchiveText.textContent = archiving
-    ? "Archiving…"
-    : state.status?.archived
-      ? "Archive new version"
-      : "Archive this page";
+  if (archiving) {
+    btnArchiveText.textContent = "Archiving…";
+  } else if (state.status?.state === "ok" && state.status.archived) {
+    btnArchiveText.textContent = "Archive new version";
+  } else {
+    btnArchiveText.textContent = "Archive this page";
+  }
 
   if (shortcut && !archiving) {
     btnArchiveShortcut.textContent = `  (${shortcut})`;
   } else {
     btnArchiveShortcut.textContent = "";
   }
+}
 
-  // --- 3. Pending Card Logic (`pendingCard()`) ---
+function renderPending() {
   const p = state.pending;
   pendingHeading.textContent = `Pending${p?.total ? ` (\${p.total})` : ""}`;
 
@@ -359,6 +362,12 @@ function render() {
   }
 }
 
+function render() {
+  renderNotice();
+  renderCurrentPage();
+  renderPending();
+}
+
 // Global Event Listeners Wiring
 btnGrantPermission.addEventListener("click", async () => {
   hasPermission = true;
@@ -377,31 +386,45 @@ btnArchive.addEventListener("click", doArchive);
 document.addEventListener("DOMContentLoaded", async () => {
   // try {
   [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+
   try {
     hasPermission = await browser.permissions.contains({ origins: ["<all_urls>"] });
   } catch {
     hasPermission = true;
   }
+
   try {
     shortcut =
       (await browser.commands.getAll()).find((c) => c.name === "archive-page")?.shortcut || "";
   } catch {}
-  state = await sendToBackground("GET_STATE", { tabId: tab.id as Int });
-  log.warn(state);
+  const stateResponse = await sendToBackground("GET_STATE", { tabId: tab.id as Int });
+  if (stateResponse.success === false) {
+    log.error(stateResponse.error);
+  } else {
+    state = stateResponse.data;
+  }
+
   render();
+
   const stale =
     !state.status ||
     state.status.url !== normalizeUrl(tab?.url ?? "") ||
     Date.now() - (state.status.checkedAt || 0) > 60000;
-  if (tab && isArchivable(tab.url ?? "") && state.configured.check && stale) recheck();
+
+  if (tab && isArchivable(tab.url ?? "") && state.configured.check && stale) {
+    recheck();
+  }
+
   if (
     state.configured.pending &&
     (!state.pending || Date.now() - (state.pending.fetchedAt || 0) > 60000)
-  )
+  ) {
     doRefresh();
+  }
+
   browser.storage.onChanged.addListener((ch, area) => {
     if (area === "local" && ch.pending) {
-      state.pending = ch.pending.newValue;
+      state.pending = ch.pending.newValue as PendingResponseInStorage;
       render();
     }
   });
