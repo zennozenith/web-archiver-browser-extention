@@ -6,11 +6,14 @@ import {
   ExtensionSettings,
   getEndpoint,
   getExtentionSettings,
+  log as rootLog,
   Result,
   saveSettings,
   setElementText,
 } from "@common/index";
 import { createError, createOk } from "@common/error";
+
+const log = rootLog.child("options");
 
 // DOM Elements
 const form = document.getElementById("options-form") as HTMLFormElement;
@@ -94,8 +97,10 @@ function showToast(message: string, type: "success" | "error" = "success"): void
 async function loadSettings(): Promise<void> {
   try {
     const settings = await getExtentionSettings();
+    log.debug("Settings loaded", Object.keys(settings));
     fillForm(settings);
   } catch (err) {
+    log.error("Failed to load settings", err);
     showToast(`Failed to load settings: ${err}`, "error");
   }
 }
@@ -249,6 +254,7 @@ form.addEventListener("submit", async (e) => {
     const saved = await saveSettings(updatedSettings);
     fillForm(saved);
 
+    log.info("Preferences saved", { keys: Object.keys(updatedSettings) });
     setElementText(
       getElementById("save-result", HTMLSpanElement),
       "✓ Preferences saved successfully!",
@@ -258,6 +264,7 @@ form.addEventListener("submit", async (e) => {
 
     showToast("✓ Preferences saved successfully!", "success");
   } catch (err) {
+    log.error("Failed to save settings", err);
     showToast(`Error saving settings: ${err}`, "error");
   } finally {
     btnSave.disabled = false;
@@ -330,8 +337,10 @@ btnReset.addEventListener("click", async () => {
   try {
     const saved = await saveSettings(DEFAULT_SETTINGS);
     fillForm(saved);
+    log.info("Preferences reset to defaults");
     showToast("Preferences reset to default values", "success");
   } catch (err) {
+    log.error("Failed to reset settings", err);
     showToast(`Error resetting settings: ${err}`, "error");
   } finally {
     btnReset.disabled = false;
@@ -349,6 +358,7 @@ inputCheckUrl.addEventListener("input", previewUrls);
 
 // Initialize on page load
 document.addEventListener("DOMContentLoaded", async () => {
+  log.debug("Options page opened");
   await loadSettings();
   previewUrls();
 

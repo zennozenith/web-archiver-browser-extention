@@ -1,7 +1,7 @@
 import {
   formatTime,
   isArchivable,
-  log,
+  log as rootLog,
   normalizeUrl,
   PendingResponseInStorage,
   sendToBackground,
@@ -9,6 +9,8 @@ import {
 } from "@common/index";
 import type { Int, State, Url } from "@common/types";
 import browser from "webextension-polyfill";
+
+const log = rootLog.child("popup");
 
 // DOM References
 const noticePermissionEl = document.getElementById("notice-permission") as HTMLDivElement;
@@ -63,11 +65,17 @@ let tab: browser.Tabs.Tab,
 async function recheck() {
   checking = true;
   render();
+  log.debug("Rechecking archive status", { tabId: tab?.id, url: tab?.url });
   const messageResponse = await sendToBackground("CHECK_ARCHIVE", { tabId: tab.id as Int });
   checking = false;
 
   if (messageResponse.success === true && messageResponse.data.ok === true) {
     state.status = messageResponse.data.data;
+  } else {
+    log.warn(
+      "Recheck failed",
+      messageResponse.success ? messageResponse.data : messageResponse.error,
+    );
   }
   render();
 }
@@ -75,6 +83,7 @@ async function recheck() {
 async function doRefresh() {
   refreshing = true;
   render();
+  log.debug("Refreshing pending list");
   await sendToBackground("REFRESH_PENDING", undefined);
 
   state = {
@@ -89,8 +98,8 @@ async function doArchive() {
   archiving = true;
   flash = "";
   render();
+  log.info("Archiving current page", { tabId: tab?.id, url: tab?.url });
   const result = await sendToBackground("ARCHIVE_TAB", { tabId: tab.id as Int });
-  log.info(result);
   archiving = false;
 
   if (result.success === true && result.data.ok === true) {
@@ -101,7 +110,12 @@ async function doArchive() {
       (result.data.data.warnings.length
         ? ` (${result.data.data.warnings.length} warning${result.data.data.warnings.length > 1 ? "s" : ""}: ${result.data.data.warnings.join("; ")})`
         : "");
+    log.info("Archive finished", {
+      status: result.data.data.status?.state,
+      warnings: result.data.data.warnings,
+    });
   } else if (result.success === false) {
+    log.error("Archive failed", result.error);
     state.archiveError = { message: result.error || "Unknown error", time: Date.now() };
   }
 
@@ -345,6 +359,7 @@ function renderPending() {
       actionBtn.title = "Open in a new tab and archive";
       actionBtn.textContent = "Archive";
       actionBtn.addEventListener("click", async () => {
+        log.debug("Pending list archive requested", { url: it.url });
         await sendToBackground("OPEN_AND_ARCHIVE", { url: it.url });
         window.close();
       });
@@ -386,6 +401,7 @@ btnArchive.addEventListener("click", doArchive);
 document.addEventListener("DOMContentLoaded", async () => {
   // try {
   [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  if (tab) log.debug("Popup opened", { tabId: tab.id, url: tab.url, title: tab.title });
 
   try {
     hasPermission = await browser.permissions.contains({ origins: ["<all_urls>"] });
@@ -399,7 +415,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   } catch {}
   const stateResponse = await sendToBackground("GET_STATE", { tabId: tab.id as Int });
   if (stateResponse.success === false) {
-    log.error(stateResponse.error);
+    log.error("GET_STATE failed", stateResponse.error);
   } else {
     state = stateResponse.data;
   }

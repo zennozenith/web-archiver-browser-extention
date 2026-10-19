@@ -1,4 +1,6 @@
-import { log } from ".";
+import { log as rootLog } from "./log.ts";
+
+const log = rootLog.child("dom");
 
 export function getElementById<T extends HTMLElement>(id: string, type: { new (): T }): T {
   const element = document.getElementById(id.startsWith("#") ? id.slice(1, id.length) : id);
@@ -6,7 +8,10 @@ export function getElementById<T extends HTMLElement>(id: string, type: { new ()
   if (element instanceof type) {
     return element;
   } else {
-    log.warn(`Element with id: ${id}, of type: ${type}, expected type: ${typeof element}`, element);
+    log.warn(
+      `getElementById: #${id} is ${element ? `not a ${type.name}` : "missing from the document"}`,
+      element,
+    );
   }
   return element as T;
   // return element instanceof type ? element : null;

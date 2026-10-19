@@ -1,4 +1,3 @@
-import { createLogger } from "./logger.ts";
 import type { Url } from "./types.ts";
 
 export * from "./types.ts";
@@ -9,10 +8,8 @@ export * from "./settings.ts";
 export * from "./messaging.ts";
 export * from "./document.ts";
 export * from "./reqwest.ts";
-export { createLogger, Logger, type Level as LogLevel } from "./logger.ts";
-
-export const bgLog = createLogger("[Background]");
-export const log = createLogger("[Ext]");
+export * from "./log.ts";
+export * from "./logger.ts";
 
 /* ---------- helpers ---------- */
 export const isHttp = (url?: Url) => /^https?:\/\//i.test(url || "");

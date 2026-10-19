@@ -1,4 +1,5 @@
-import { Logger, log as genericLog } from "@common/index";
+import type { Logger } from "./logger.ts";
+import { log as genericLog } from "./log.ts";
 import { Err, ErrorType, Ok } from "./types";
 
 export function createError<E = never>({

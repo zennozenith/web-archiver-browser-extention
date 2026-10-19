@@ -1,5 +1,8 @@
 import browser from "webextension-polyfill";
-import { Int, log, Result, State, Status, Url } from "./index.ts";
+import type { Int, Result, State, Status, Url } from "./types.ts";
+import { log as rootLog } from "./log.ts";
+
+const log = rootLog.child("messaging");
 
 export type Empty = Record<string, never>;
 
@@ -65,12 +68,14 @@ export async function sendToBackground<T extends MessageType>(
   ...args: PayloadArgs<T>
 ): Promise<MessageResponse<MessageData<T>>> {
   const message = { type, payload: args[0] } as Message<T>;
+  log.debug(`message:${type} →`, args[0]);
   try {
     const response: unknown = await browser.runtime.sendMessage(message);
     if (!isMessageResponse<MessageData<T>>(response)) {
-      log.error(`message:${type} No/invalid response received`);
+      log.error(`message:${type} No/invalid response received`, response);
       return { success: false, error: "No response received" };
     }
+    log.debug(`message:${type} ← ok`);
     return response;
   } catch (err) {
     log.error(`message:${type} send failed`, err);

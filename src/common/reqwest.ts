@@ -1,5 +1,8 @@
 import { createError, isNamedError, isStandardError } from "./error";
+import { log as rootLog } from "./log.ts";
 import type { ReqeustOptions, Result, Url } from "./types";
+
+const log = rootLog.child("http");
 
 export interface ApiErrorDetail {
   field?: string;
@@ -103,6 +106,11 @@ export async function request<T>(
   if (token) headers.Authorization = `Bearer ${token}`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  const done = log.time(`${method} ${url}`);
+  log.debug(`${method} ${url} →`, {
+    timeoutMs,
+    body: body instanceof FormData ? "FormData" : body,
+  });
   let res, text;
   try {
     res = await fetch(url, {
@@ -126,6 +134,7 @@ export async function request<T>(
   } finally {
     clearTimeout(timer);
   }
+  done(res.status);
 
   let data: T | null = null;
   try {
