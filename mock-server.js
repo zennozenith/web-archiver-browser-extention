@@ -25,26 +25,29 @@ if (!fs.existsSync(ARCHIVES_DIR)) {
 }
 
 // In-memory pending queue with sample URLs
-let pendingUrls = [
-  {
-    id: "p-1",
-    url: "https://en.wikipedia.org/wiki/Web_archiving",
-    title: "Web Archiving - Wikipedia",
-    addedAt: new Date(Date.now() - 3600000 * 2).toISOString(),
-  },
-  {
-    id: "p-2",
-    url: "https://news.ycombinator.com",
-    title: "Hacker News",
-    addedAt: new Date(Date.now() - 3600000 * 5).toISOString(),
-  },
-  {
-    id: "p-3",
-    url: "https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions",
-    title: "MDN WebExtensions Documentation",
-    addedAt: new Date(Date.now() - 3600000 * 24).toISOString(),
-  },
-];
+let pendingUrls = {
+  items: [
+    {
+      id: "p-1",
+      url: "https://en.wikipedia.org/wiki/Web_archiving",
+      title: "Web Archiving - Wikipedia",
+      addedAt: new Date(Date.now() - 3600000 * 2).toISOString(),
+    },
+    {
+      id: "p-2",
+      url: "https://news.ycombinator.com",
+      title: "Hacker News",
+      addedAt: new Date(Date.now() - 3600000 * 5).toISOString(),
+    },
+    {
+      id: "p-3",
+      url: "https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions",
+      title: "MDN WebExtensions Documentation",
+      addedAt: new Date(Date.now() - 3600000 * 24).toISOString(),
+    },
+  ],
+  total: 3,
+};
 
 // In-memory archive registry: url -> Array of version objects
 const archiveIndex = new Map();
