@@ -22,7 +22,7 @@ export default defineConfig({
   build: {
     outDir,
     emptyOutDir: true,
-    minify: false,
+    minify: process.env.NODE_ENV === "production",
   },
   resolve: {
     alias: {

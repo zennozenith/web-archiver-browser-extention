@@ -1,6 +1,6 @@
-import { createError, isNamedError, isStandardError } from "./error";
+import { createError, isNamedError, isStandardError, Result } from "./error";
 import { log as rootLog } from "./log.ts";
-import type { ISODateTime, ReqeustOptions, Result, Url, Uuid } from "./types";
+import type { ISODateTime, ReqeustOptions, Url, Uuid } from "./types";
 
 const log = rootLog.child("http");
 
@@ -105,7 +105,7 @@ export async function request<T>(
     token,
     timeoutMs = 30000,
   }: ReqeustOptions = {},
-): Promise<Result<T, string>> {
+): Promise<Result<T>> {
   try {
     new URL(url);
   } catch {

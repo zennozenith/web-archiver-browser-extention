@@ -1,5 +1,5 @@
 {
-  "name": "myopic-archive-server",
+  "name": "web-archive-server",
   "private": true,
   "type": "module",
   "scripts": {

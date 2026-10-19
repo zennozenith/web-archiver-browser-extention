@@ -1,0 +1,119 @@
+<!doctype html>
+<html>
+  <head>
+    <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>URL Archiver</title>
+    <!-- <script type="module" src="index.js"></script> -->
+    <script type="module" src="event-bus-example.js"></script>
+    <link rel="stylesheet" href="./popup.css" />
+  </head>
+
+  <body>
+    <header>
+      <h1>URL Archiver</h1>
+      <button id="btn-open-options" class="icon" title="Preferences" aria-label="Preferences">
+        ⚙
+      </button>
+    </header>
+
+    <div id="spinner" class="spinner-card">
+      <div class="spinner-dots">
+        <div></div>
+        <div></div>
+        <div></div>
+      </div>
+    </div>
+
+    <main id="app" class="hidden">
+      <!-- Notice Section: Permissions -->
+      <div id="notice-permission" class="notice hidden">
+        <div>
+          Site access hasn't been granted yet. It's needed to read pages and request headers.
+        </div>
+        <button id="btn-grant-permission" type="button" class="sm">Grant access</button>
+      </div>
+
+      <!-- Notice Section: No Server Configured -->
+      <div id="notice-no-server" class="notice hidden">
+        <div>No server configured yet.</div>
+        <button id="btn-open-options" type="button" class="sm">Open preferences</button>
+      </div>
+
+      <!-- Error Box: Archive Endpoint Not Configured -->
+      <div id="error-endpoint" class="error hidden hidden-box">
+        <span id="error-endpoint-text"
+          >Archive endpoint is not configured. Check the preferences.</span
+        >
+      </div>
+
+      <!-- Error Box: Any Error -->
+      <div id="error-any" class="error hidden hidden-box">Error Occured</div>
+
+      <!-- Section Card: Current Page -->
+      <section class="card" id="card-current-section">
+        <h2>Current page</h2>
+
+        <!-- Unarchivable state container -->
+        <div id="current-unarchivable" class="muted hidden">
+          This page can't be archived (only http/https pages).
+        </div>
+
+        <!-- Active Page Meta Info -->
+        <div id="current-meta">
+          <div id="current-title" class="title"></div>
+          <div id="current-url" class="url"></div>
+        </div>
+
+        <!-- Current Page Status Row -->
+        <div class="row">
+          <div id="current-status-pill-container">
+            <span id="current-status-pill" class="pill muted">Status check not configured</span>
+          </div>
+          <button id="btn-recheck" class="sm hidden" title="Re-check archive status">↻</button>
+        </div>
+
+        <!-- Current Page Errors/Success/Versions -->
+        <div id="current-error-container"></div>
+        <ul id="current-versions-list" class="versions hidden"></ul>
+        <div id="current-versions-overflow" class="muted small hidden"></div>
+        <div id="current-last-archived" class="muted small hidden"></div>
+        <div id="current-flash" class="success hidden"></div>
+
+        <!-- Archive Action Button -->
+        <button id="btn-archive" class="primary">
+          <span id="btn-archive-text">Archive this page</span>
+          <span
+            id="btn-archive-shortcut"
+            class="small"
+            style="font-weight: 400; opacity: 0.85"
+          ></span>
+        </button>
+      </section>
+
+      <!-- Section Card: Pending Card -->
+      <section class="card" id="card-pending-section">
+        <div class="row">
+          <h2 id="pending-heading">Pending</h2>
+          <div class="row">
+            <span id="pending-fetched-time" class="muted small hidden"></span>
+            <button id="btn-refresh-pending" class="sm" title="Refresh pending list">
+              <span id="refresh-icon">↻</span>
+            </button>
+          </div>
+        </div>
+
+        <div id="pending-unconfigured" class="muted hidden">
+          Pending URL endpoint not configured.
+        </div>
+        <div id="pending-error-container"></div>
+        <div id="pending-empty" class="muted hidden">Nothing pending 🎉</div>
+
+        <ul id="pending-list" class="pending"></ul>
+
+        <div id="pending-overflow" class="muted small hidden"></div>
+      </section>
+    </main>
+  </body>
+</html>

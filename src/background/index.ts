@@ -10,32 +10,32 @@ import {
   isArchivable,
   normalizeUrl,
   Page,
-  request,
   session_storage_delete,
   session_storage_get,
   session_storage_set,
   sha256,
-  Status,
+  ArchiveStatus,
   Url,
-  Result,
   getEndpoint,
   HeadersDetails,
-  ApiArchiveVersionsResponse,
-  ApiCheckPendingResponse,
-  PendingResponseInStorage,
   MessageType,
   MessagePayload,
   MessageData,
-  MessageResponse,
   Message,
-  State,
   log as rootLog,
   receiveForwardedLogsInBackground,
   ApiSuccessArchiveResponse,
+  Configured,
 } from "@common/index";
 import { collectPage, pageBanner } from "./page";
-import { createError, createOk, isStandardError } from "@common/error";
+import { createError, createOk, isStandardError, Result } from "@common/error";
 import { WebRequest } from "webextension-polyfill";
+import {
+  ApiArchiveVersionsResponse,
+  ApiCheckPendingResponse,
+  PendingResponseInStorage,
+  request,
+} from "@common/reqwest";
 
 /* ── per-subsystem child loggers (context tag "background" is added automatically) ── */
 const log = rootLog.child("bg");
@@ -62,7 +62,7 @@ log.info("Service worker / background script initialized", {
 const ALARM = "refresh-pending";
 const SENSITIVE = new Set(["cookie", "authorization", "proxy-authorization", "set-cookie"]);
 const busyTabs = new Set<Int>();
-const inflight = new Map<`${Int}|${Url}`, Promise<Result<Status>>>();
+const inflight = new Map<`${Int}|${Url}`, Promise<Result<ArchiveStatus>>>();
 const sleep = (ms: Int) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const headerMemory = new Map<Int, Partial<HeadersDetails>>();
@@ -146,25 +146,34 @@ async function updateBadge({
   }
 }
 
-function applyStatusBadge(tabId: Int, status: Status | null): Promise<void> {
-  if (!status || status.state === "unsupported" || status.state === "unconfigured") {
+function applyStatusBadge(tabId: Int, archiveStatus: ArchiveStatus | null): Promise<void> {
+  if (
+    !archiveStatus ||
+    archiveStatus.state === "unsupported" ||
+    archiveStatus.state === "unconfigured"
+  ) {
     return updateBadge({
       tabId,
       text: "",
       title:
-        status?.state === "unconfigured" ? "URL Archiver — server not configured" : "URL Archiver",
+        archiveStatus?.state === "unconfigured"
+          ? "URL Archiver — server not configured"
+          : "URL Archiver",
     });
   }
-  if (status.state === "error")
+
+  if (archiveStatus.state === "error") {
     return updateBadge({
       tabId,
       text: "!",
       color: "#d93025",
-      title: `Status check failed: ${status.error}`,
+      title: `ArchiveStatus check failed: ${archiveStatus.error}`,
     });
-  if (status.archived) {
-    const n = status.count || status.versions?.length || 0;
-    const when = status.versions?.[0]?.archivedAt ?? status.lastArchivedAt;
+  }
+
+  if (archiveStatus.state === "ok" && archiveStatus.archived) {
+    const n = archiveStatus.count || archiveStatus.versions?.length || 0;
+    const when = archiveStatus.versions?.[0]?.archivedAt ?? archiveStatus.lastArchivedAt;
     return updateBadge({
       tabId,
       text: n ? (n > 99 ? "99+" : String(n)) : "✓",
@@ -172,6 +181,7 @@ function applyStatusBadge(tabId: Int, status: Status | null): Promise<void> {
       title: `Archived${n ? ` — ${n} version${n === 1 ? "" : "s"}` : ""}${when ? `\nLast: ${formatTime(when)}` : ""}`,
     });
   }
+
   return updateBadge({
     tabId,
     text: "",
@@ -181,7 +191,7 @@ function applyStatusBadge(tabId: Int, status: Status | null): Promise<void> {
 
 /* ================= capture + archive ================= */
 
-async function checkArchiveVersion(tabId: Int): Promise<Result<Status>> {
+async function checkArchiveStatus(tabId: Int): Promise<Result<ArchiveStatus>> {
   let tab: browser.Tabs.Tab;
   try {
     tab = await browser.tabs.get(tabId);
@@ -193,23 +203,36 @@ async function checkArchiveVersion(tabId: Int): Promise<Result<Status>> {
     });
   }
 
-  if (!isArchivable(tab.url)) {
-    logCheck.debug("URL not archivable, clearing status", { tabId, url: tab.url });
+  const _url = tab.url;
+
+  if (_url === undefined || !isArchivable(_url)) {
+    logCheck.debug("URL not archivable, clearing status", { tabId, url: _url });
     await session_storage_delete(`status:${tabId}`);
     applyStatusBadge(tabId, null);
-    return createOk({ state: "unsupported", url: tab.url as Url, checkedAt: Date.now() });
+    return createOk({
+      state: "unsupported",
+      error: `URL not archivable: ${_url}`,
+      url: tab.url ?? "Url not present",
+      checkedAt: Date.now(),
+    });
   }
 
   const extentionSettings = await getExtentionSettings();
   const endpoint = getEndpoint(extentionSettings);
-  const url = normalizeUrl(tab.url as Url);
+  const url = normalizeUrl(_url);
 
   if (!endpoint.check) {
     logCheck.debug("Check endpoint not configured", { tabId, url });
-    const status: Status = { state: "unconfigured", url, checkedAt: Date.now() };
-    await session_storage_set(`status:${tabId}`, status);
-    applyStatusBadge(tabId, status);
-    return createOk(status);
+    const archiveStatus: ArchiveStatus = {
+      state: "unconfigured",
+      url,
+      checkedAt: Date.now(),
+      error: "Check endpoint not configured",
+    };
+
+    await session_storage_set(`status:${tabId}`, archiveStatus);
+    applyStatusBadge(tabId, archiveStatus);
+    return createOk(archiveStatus);
   }
 
   const key = `${tabId}|${url}` as const;
@@ -219,8 +242,8 @@ async function checkArchiveVersion(tabId: Int): Promise<Result<Status>> {
     return status;
   }
 
-  const inflightStatusPromise: Promise<Result<Status>> = (async () => {
-    let status: Status;
+  const inflightStatusPromise: Promise<Result<ArchiveStatus>> = (async () => {
+    let archiveStatus: ArchiveStatus;
     logCheck.debug("Checking archive status", { tabId, url });
     const done = logCheck.time("status check");
     try {
@@ -229,14 +252,19 @@ async function checkArchiveVersion(tabId: Int): Promise<Result<Status>> {
         timeoutMs: 20000,
       });
       if (data.ok === false) {
-        status = { state: "error", url, checkedAt: Date.now(), error: data.error.message };
+        archiveStatus = {
+          state: "error",
+          url,
+          checkedAt: Date.now(),
+          error: data.messages.toString(),
+        };
       } else {
-        status = { state: "ok", url, checkedAt: Date.now(), ...data.data };
+        archiveStatus = { state: "ok", url, checkedAt: Date.now(), ...data.data };
       }
-      done(status.state);
+      done(archiveStatus.state);
     } catch (e) {
       const errorMessage = isStandardError(e) ? e.message : String(e);
-      status = {
+      archiveStatus = {
         state: "error",
         url,
         error: errorMessage,
@@ -244,13 +272,13 @@ async function checkArchiveVersion(tabId: Int): Promise<Result<Status>> {
       };
     }
 
-    logCheck[status.state === "error" ? "warn" : "debug"](
-      `Archive status: ${status.state}`,
-      status,
+    logCheck[archiveStatus.state === "error" ? "warn" : "debug"](
+      `Archive status: ${archiveStatus.state}`,
+      archiveStatus,
     );
-    await session_storage_set("status:" + tabId, status);
-    applyStatusBadge(tabId, status);
-    return createOk(status);
+    await session_storage_set("status:" + tabId, archiveStatus);
+    applyStatusBadge(tabId, archiveStatus);
+    return createOk(archiveStatus);
   })().finally(() => inflight.delete(key));
 
   inflight.set(key, inflightStatusPromise);
@@ -333,8 +361,12 @@ async function takeScreenshot(
   extensionSettings: ExtensionSettings,
   page: Page,
   warnings: string[],
-): Promise<{ blob: Blob; ext: "jpg" | "png" } | null> {
-  const format = extensionSettings.screenshotFormat === "jpeg" ? "jpeg" : "png";
+): Promise<{
+  blob: Blob;
+  ext: "jpg" | "png";
+  format: ExtensionSettings["screenshotFormat"];
+} | null> {
+  const format = extensionSettings.screenshotFormat;
   const opts: { format: ExtensionSettings["screenshotFormat"]; quality?: number } = { format };
   if (format === "jpeg") opts.quality = Number(extensionSettings.jpegQuality) || 85;
 
@@ -370,13 +402,16 @@ async function takeScreenshot(
     }
     dataUrl = await browser.tabs.captureVisibleTab(tab.windowId, opts);
   }
-  return { blob: await (await fetch(dataUrl)).blob(), ext: format === "jpeg" ? "jpg" : "png" };
+  return {
+    blob: await (await fetch(dataUrl)).blob(),
+    ext: format === "jpeg" ? "jpg" : "png",
+    format,
+  };
 }
 
 async function archiveTab(tabId: Int): Promise<
   Result<{
-    status: Status | null;
-    response: Result<ApiSuccessArchiveResponse, string>;
+    response: ApiSuccessArchiveResponse;
     warnings: string[];
   }>
 > {
@@ -405,14 +440,17 @@ async function archiveTab(tabId: Int): Promise<
     }
 
     const tab = await browser.tabs.get(tabId);
-    if (!isArchivable(tab.url)) {
+    const url = tab.url;
+
+    if (url === undefined || !isArchivable(url)) {
       return createError({
         log: logArchive,
         message: "Only http(s) pages can be archived.",
         extra: { url: tab.url },
       });
     }
-    logArchive.info("Archiving page", { tabId, url: tab.url, title: tab.title });
+
+    logArchive.info("Archiving page", { tabId, url, title: tab.title });
 
     await updateBadge({
       tabId,
@@ -442,7 +480,7 @@ async function archiveTab(tabId: Int): Promise<
     }
 
     const warnings: string[] = [];
-    let screenshot = null;
+    let screenshot: Awaited<ReturnType<typeof takeScreenshot>> = null;
 
     if (extensionSettings.includeScreenshot) {
       try {
@@ -514,7 +552,7 @@ async function archiveTab(tabId: Int): Promise<
               name: `screenshot.${screenshot.ext}`,
               size: screenshot.blob.size,
               sha256: await sha256(screenshot.blob),
-              format: screenshot.ext,
+              format: screenshot.format,
             }
           : null,
       },
@@ -529,6 +567,11 @@ async function archiveTab(tabId: Int): Promise<
     );
     formData.append("html", htmlBlob, "page.html");
     if (screenshot) {
+      formData.append(
+        "screenshot-type",
+        new Blob([screenshot.format], { type: "text/plain" }),
+        "screenshot-type.txt",
+      );
       formData.append("screenshot", screenshot.blob, `screenshot.${screenshot.ext}`);
     }
 
@@ -537,29 +580,22 @@ async function archiveTab(tabId: Int): Promise<
       htmlBytes: htmlBlob.size,
       screenshotBytes: screenshot?.blob.size ?? null,
     });
-    const response = await request<ApiSuccessArchiveResponse>(endpoint.archive, {
+
+    const result = await request<ApiSuccessArchiveResponse>(endpoint.archive, {
       method: "POST",
       body: formData,
       token: extensionSettings.apiToken,
       timeoutMs: (Number(extensionSettings.requestTimeoutSec) || 120) * 1000,
     });
 
-    const resultStatus = await checkArchiveVersion(tabId); // refresh version info/badge
-    if (resultStatus.ok === false) {
-      return createError({
-        log: logArchive,
-        ...resultStatus.error,
-      });
+    if (result.ok === false) {
+      return result;
     }
-    refreshPending(); // refresh pending list after archive (not awaited)
-    if (resultStatus.data.state === "ok") {
-      logArchive.info("Page archived", {
-        tabId,
-        url: page.url,
-        versions: resultStatus.data.count,
-      });
-    }
-    return createOk({ status: resultStatus.data, response, warnings });
+
+    return createOk({
+      response: result.data,
+      warnings,
+    });
   } catch (e) {
     logArchive.error("Archive request failed", e);
     return createError({
@@ -576,26 +612,20 @@ async function archiveTab(tabId: Int): Promise<
 async function archiveWithFeedback(
   tabId: Int,
   { toast }: { toast: boolean },
-): ReturnType<typeof archiveTab> {
+): Promise<
+  Result<{
+    response: ApiSuccessArchiveResponse;
+    warnings: string[];
+  }>
+> {
   try {
     const result = await archiveTab(tabId);
     if (result.ok === false) {
-      return createError({
-        log: logArchive,
-        ...result.error,
-      });
-    }
-
-    if (result.data.status?.state !== "ok") {
-      return createError({
-        log: logArchive,
-        message: result.data.status?.state ?? "status not ok",
-        extra: result.data,
-      });
+      return result;
     }
 
     if (toast) {
-      const n = result.data.status.count;
+      const n = result.data.response.versionCount;
       injectBanner(tabId, {
         mode: "toast",
         kind: "ok",
@@ -607,7 +637,7 @@ async function archiveWithFeedback(
     const errorMessage = isStandardError(e) ? e.message : String(e);
     logArchive.error("Archive failed", errorMessage, e);
 
-    await session_storage_set("archiveError:" + tabId, {
+    await session_storage_set(`archiveError:${tabId}`, {
       message: errorMessage,
       time: Date.now(),
     });
@@ -658,33 +688,6 @@ async function handleOpened(tabId: Int) {
   }
 }
 
-/* ================= ================= ================= */
-
-// // Lifecycle: onInstalled
-// browser.runtime.onInstalled.addListener(async (details) => {
-//   console.log("[Background] Extension installed/updated, reason:", details.reason);
-
-//   const initialSettings = await getExtentionSettings();
-//   await browser.storage.sync.set({
-//     [STORAGE_KEYS.SETTINGS]: { ...DEFAULT_SETTINGS, ...initialSettings },
-//   });
-
-//   const count = await getCounter();
-//   await updateBadge(count);
-// });
-
-// // Storage changes: keep badge synchronized
-// browser.storage.onChanged.addListener((changes, namespace) => {
-//   if (namespace === "local" && changes[STORAGE_KEYS.COUNTER]) {
-//     const rawValue = changes[STORAGE_KEYS.COUNTER].newValue;
-//     const newCount = typeof rawValue === "number" ? rawValue : 0;
-//     updateBadge(newCount);
-//   } else if (namespace === "sync" && changes[STORAGE_KEYS.SETTINGS]) {
-//     getCounter().then(updateBadge);
-//   }
-// });
-
-/* ================= ================= ================= */
 async function ensureAlarm(force: boolean = false) {
   const extentionSettings = await getExtentionSettings();
   const mins = Math.max(1, Number(extentionSettings.pendingRefreshMinutes) || 0);
@@ -700,13 +703,13 @@ async function ensureAlarm(force: boolean = false) {
 /* ================= events ================= */
 browser.tabs.onUpdated.addListener(async (tabId, change, tab) => {
   const loaded = change.status === "complete" || (change.url && tab.status === "complete");
-  if (!loaded || !isArchivable(tab.url)) return;
+  if (!loaded || tab.url === undefined || !isArchivable(tab.url)) return;
   logWebReq.debug("Page load complete", { tabId, url: tab.url });
   if (change.status === "complete" && (await session_storage_get(`open:${tabId}`))) {
     handleOpened(tabId);
   }
   const extentionSettings = await getExtentionSettings();
-  if (extentionSettings.autoCheck) checkArchiveVersion(tabId);
+  if (extentionSettings.autoCheck) checkArchiveStatus(tabId);
 });
 
 browser.tabs.onActivated.addListener(async ({ tabId }) => {
@@ -719,7 +722,7 @@ browser.tabs.onActivated.addListener(async ({ tabId }) => {
   const tab = await browser.tabs.get(tabId);
 
   if (extentionSettings.autoCheck && tab.url !== "") {
-    checkArchiveVersion(tabId);
+    checkArchiveStatus(tabId);
   }
 });
 
@@ -767,13 +770,13 @@ browser.runtime.onStartup.addListener(() => {
   refreshPending();
 });
 
-browser.storage.onChanged.addListener(async (changes, area) => {
-  if (area !== "local" || !changes.settings) return;
+browser.storage.onChanged.addListener(async (changes, namespace) => {
+  if (namespace !== "local" || !changes.settings) return;
   log.debug("Settings changed, refreshing pending list and status", Object.keys(changes));
   await ensureAlarm(true);
   await refreshPending();
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  if (tab) checkArchiveVersion(tab.id as number);
+  if (tab) checkArchiveStatus(tab.id as number);
 });
 
 browser.webRequest.onSendHeaders.addListener(
@@ -826,7 +829,7 @@ type Handlers = {
   [K in MessageType]: (
     payload: MessagePayload<K>,
     sender: browser.Runtime.MessageSender,
-  ) => MessageData<K> | Promise<MessageData<K>>;
+  ) => Result<MessageData<K>> | Promise<Result<MessageData<K>>>;
 };
 
 /** Requires a handler for every message type (compile error if one is missing). */
@@ -836,19 +839,17 @@ export function registerHandlers(handlers: Handlers): void {
 
     logMsg.debug("→ On message", raw.type, raw.payload, { senderTabId: sender?.tab?.id ?? null });
 
-    const handler = handlers[raw.type] as (
-      payload: unknown,
-      sender: browser.Runtime.MessageSender,
-    ) => unknown;
+    const handler = handlers[raw.type];
 
-    return (async (): Promise<MessageResponse<unknown>> => {
+    return (async (): Promise<Result<unknown>> => {
       try {
-        return { success: true, data: await handler(raw.payload, sender) };
+        return await handler(raw.payload as never, sender);
       } catch (err) {
         logMsg.error(`message:${raw.type} handler failed`, err);
         return {
-          success: false,
-          error: err instanceof Error ? err.message : String(err),
+          ok: false,
+          messages: [isStandardError(err) ? err.message : String(err)],
+          extra: isStandardError(err) ? [] : [err],
         };
       }
     })();
@@ -866,43 +867,52 @@ function isMessage(raw: unknown, handlers: Handlers): raw is Message {
 }
 
 registerHandlers({
-  GET_STATE: async ({ tabId }) => {
+  GET_CONFIGURED: async () => {
     const extentionSettings = await getExtentionSettings();
     const endpoint = getEndpoint(extentionSettings);
+    return createOk<Configured>({
+      server: endpoint.server !== "",
+      archive: endpoint.archive !== "",
+      pending: endpoint.pending !== "",
+      check: endpoint.check !== "",
+      pendingLimit: extentionSettings.pendingLimit,
+      logLevel: extentionSettings.logLevel,
+    });
+  },
+  GET_ARCHIVE: async ({ tabId }) => {
+    return await checkArchiveStatus(tabId);
+  },
+  GET_PENDING: async () => {
     const { pending } = (await browser.storage.local.get({ pending: null })) as {
       pending: PendingResponseInStorage;
     };
-    return {
-      ok: true,
-      configured: {
-        server: endpoint.server !== "",
-        archive: endpoint.archive !== "",
-        pending: endpoint.pending !== "",
-        check: endpoint.check !== "",
-      },
-      status: tabId != null ? ((await session_storage_get("status:" + tabId)) ?? null) : null,
-      archiveError:
-        tabId != null ? ((await session_storage_get("archiveError:" + tabId)) ?? null) : null,
-      pending,
-      pendingLimit: extentionSettings.pendingLimit,
-    } satisfies State;
+    return createOk<PendingResponseInStorage>(pending);
+  },
+  REFRESH_PENDING: async () => {
+    // TODO: check if refreshPending return type should be returned
+    const t = await refreshPending();
+    return createOk({ ok: t === null ? false : t.ok });
   },
   ARCHIVE_TAB: async ({ tabId }) => {
     return await archiveWithFeedback(tabId, { toast: false });
   },
-  CHECK_ARCHIVE: async ({ tabId }) => await checkArchiveVersion(tabId),
-  ARCHIVE_FROM_PAGE: async (_, sender) =>
-    await archiveWithFeedback(sender.tab!.id as Int, { toast: false }),
-  REFRESH_PENDING: async () => {
-    const t = await refreshPending();
-    return { ok: t === null ? false : t.ok };
-  },
   OPEN_AND_ARCHIVE: async ({ url }) => {
     await openAndArchive(url);
+    return createOk(undefined);
   },
-  CLEAR_ARCHIVE_ERROR: async ({ tabId }) => {
-    await session_storage_delete(`archiveError:${tabId}`);
-    applyStatusBadge(tabId, await session_storage_get(`status:${tabId}`));
-    return { ok: true };
+  ARCHIVE_FROM_PAGE: async (_, sender) => {
+    if (sender.tab?.id === undefined) {
+      return createError({
+        log: logArchive,
+        message: "Tab id undefined",
+      });
+    }
+
+    const result = await archiveWithFeedback(sender.tab.id, { toast: false });
+    if (result.ok === false) {
+      return result;
+    }
+
+    return await checkArchiveStatus(sender.tab.id);
   },
 });

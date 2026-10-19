@@ -79,7 +79,7 @@ To test the extensions immediately on your machine without configuring an extern
 3. Click **Load unpacked**.
 4. Select the `chrome/` folder inside this repository:
    ```
-   /home/knack/github/myopic-browser-extention/chrome
+   /home/knack/github/web-browser-extention/chrome
    ```
 5. Pin the extension to your toolbar.
 
@@ -94,7 +94,7 @@ To test the extensions immediately on your machine without configuring an extern
 2. Click **Load Temporary Add-on...**.
 3. Select the `manifest.json` file inside the `firefox/` folder:
    ```
-   /home/knack/github/myopic-browser-extention/firefox/manifest.json
+   /home/knack/github/web-browser-extention/firefox/manifest.json
    ```
 4. The extension is now loaded and available in your toolbar.
 

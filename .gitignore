@@ -39,6 +39,7 @@ dist-ssr
 /temp
 
 # Local test archive data
-archives/*
+mock-server/archives/*
+mock-server/db.sqlite
 !archives/.gitkeep
 

@@ -7,11 +7,10 @@ import {
   getEndpoint,
   getExtentionSettings,
   log as rootLog,
-  Result,
   saveSettings,
   setElementText,
 } from "@common/index";
-import { createError, createOk } from "@common/error";
+import { createError, createOk, Result } from "@common/error";
 
 const log = rootLog.child("options");
 
@@ -216,8 +215,8 @@ function previewUrls(): void {
 
   const tr3 = getElementById("effective3", HTMLTableRowElement);
   tr3.children[0].textContent = "check";
-  tr2.children[1].textContent = endpoint.check;
-  tr2.children[2].textContent = checkUrl.override ? "override" : "derived";
+  tr3.children[1].textContent = endpoint.check;
+  tr3.children[2].textContent = checkUrl.override ? "override" : "derived";
 }
 
 /**
@@ -266,7 +265,11 @@ form.addEventListener("submit", async (e) => {
       err = validateUrls(updatedSettings);
 
     if (err.ok === false) {
-      setElementText(getElementById("save-result", HTMLSpanElement), err.error.message, "err");
+      setElementText(
+        getElementById("save-result", HTMLSpanElement),
+        err.messages.toString(),
+        "err",
+      );
       return;
     }
 

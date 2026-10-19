@@ -1,26 +1,49 @@
 import type { Logger } from "./logger.ts";
 import { log as genericLog } from "./log.ts";
-import { Err, ErrorType, Ok } from "./types";
+import { NonEmptyArray } from "./types.ts";
 
-export function createError<E = never>({
+export interface Ok<T> {
+  ok: true;
+  data: T;
+}
+
+export interface Err {
+  ok: false;
+  messages: NonEmptyArray<string>;
+  extra: Array<unknown>;
+}
+
+export type Result<T> = Ok<T> | Err;
+
+export function createError({
   log = genericLog,
+  error,
   message,
-  type = "generic",
-  extra,
+  extra: _extra,
 }: {
   log?: Logger;
+  error?: Err;
   message: string;
-  type?: ErrorType;
-  extra?: E;
-}): Err<E> {
-  log.error(`[${type}] ${message}`, extra);
+  extra?: unknown;
+}): Err {
+  log.error(message, _extra);
+  const extra: any[] = [];
+  if (_extra !== null || _extra !== undefined) {
+    extra.push(_extra);
+  }
+
+  if (error) {
+    return {
+      ok: false,
+      messages: [message, ...error.messages],
+      extra: [...extra, ...error.extra],
+    };
+  }
+
   return {
     ok: false,
-    error: {
-      type,
-      message,
-      extra,
-    },
+    messages: [message],
+    extra,
   };
 }
 

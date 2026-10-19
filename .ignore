@@ -1,2 +1,4 @@
+bun.lock
 /public/icons
 /assets/icon*
+/testing

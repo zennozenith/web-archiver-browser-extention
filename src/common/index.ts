@@ -7,12 +7,11 @@ export * from "./storage.ts";
 export * from "./settings.ts";
 export * from "./messaging.ts";
 export * from "./document.ts";
-export * from "./reqwest.ts";
 export * from "./log.ts";
 export * from "./logger.ts";
 
 /* ---------- helpers ---------- */
-export const isHttp = (url?: Url) => /^https?:\/\//i.test(url || "");
+export const isHttp = (url: Url) => /^https?:\/\//i.test(url || "");
 export const isArchivable = isHttp;
 
 export function normalizeUrl(url: string): string {

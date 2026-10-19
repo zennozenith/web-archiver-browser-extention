@@ -1,5 +1,5 @@
-import { MessageResponse } from "@common/messaging";
-import { BannerOpts, Page, Result, Status } from "@common/types";
+import { Result } from "@common/error";
+import { BannerOpts, Page, ArchiveStatus } from "@common/types";
 
 /**
  * runs inside the page
@@ -37,7 +37,7 @@ export function collectPage(): Page {
     scrollHeight: document.documentElement.scrollHeight,
     userAgent: navigator.userAgent,
     language: navigator.language,
-  };
+  } satisfies Page;
 }
 
 /* ================= in-page banner (prompt / toast) ================= */
@@ -87,23 +87,12 @@ export function pageBanner(opts: BannerOpts) {
   const archive = async () => {
     render("", "Archiving…", []);
 
-    const result: MessageResponse<
-      Result<{
-        status: Status | null;
-        response: string | { ok: boolean };
-        warnings: string[];
-      }>
-    > = await api.runtime.sendMessage({
+    const result: Result<ArchiveStatus> = await api.runtime.sendMessage({
       type: "ARCHIVE_FROM_PAGE",
     });
 
-    if (
-      result.success === true &&
-      result.data.ok === true &&
-      result.data.data.status &&
-      result.data.data.status.state === "ok"
-    ) {
-      const count = result.data.data.status.count;
+    if (result.ok === true && result.data.state === "ok") {
+      const count = result.data.count;
 
       render("ok", "Archived ✓" + (count ? ` (${count} version${count === 1 ? "" : "s"})` : ""), [
         ["Close", close],

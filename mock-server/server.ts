@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Myopic self-hosted archive server (Bun + bun:sqlite, zero dependencies).
+ * Web archiver self-hosted archive server (Bun + bun:sqlite, zero dependencies).
  *
  *   GET    /                         Web UI (index.html)
  *   POST   /api/archive              multipart/form-data: html, screenshot, metadata (+ optional url, title)
@@ -13,7 +13,7 @@
  *   DELETE /api/pending/:id          Remove from the queue
  *   POST   /api/pending/complete     { id?, url? } mark done (extension compatible)
  *   GET    /api/health               Stats
- *   GET    /archives/:folder/:file   page.html | screenshot.png | metadata.json
+ *   GET    /archives/:folder/:file   page.html | screenshot.[png|jpg] | metadata.json
  *
  * Env: PORT (3000), HOST (127.0.0.1), DATA_DIR (script dir), MAX_BODY_MB (256)
  */
@@ -31,7 +31,7 @@ mkdirSync(ARCHIVES_DIR, { recursive: true });
 
 // ---------- Database ----------
 
-const db = new Database(join(DATA_DIR, "myopic.sqlite"), { create: true });
+const db = new Database(join(DATA_DIR, "db.sqlite"), { create: true });
 db.run(`
   PRAGMA journal_mode = WAL;
   CREATE TABLE IF NOT EXISTS archives (
@@ -203,7 +203,7 @@ async function handleArchive(req: Request): Promise<Response> {
         : new Uint8Array(await v.arrayBuffer());
 
   const html = await asBytes(pick(["html", "page.html"]));
-  const screenshot = await asBytes(pick(["screenshot", "screenshot.png"]));
+  const screenshot = await asBytes(pick(["screenshot", "screenshot.png"])); //todo: screenshot.jpg
   const metaText = await asText(pick(["metadata", "json", "metadata.json"]));
   let meta: Record<string, any> | null = null;
   try {
@@ -413,9 +413,9 @@ const server = Bun.serve({
   },
 });
 
-console.log(`🚀 Myopic archive server: ${server.url}`);
+console.log(`🚀 Web archive server: ${server.url}`);
 console.log(`   Archives: ${ARCHIVES_DIR}`);
-console.log(`   Database: ${join(DATA_DIR, "myopic.sqlite")}`);
+console.log(`   Database: ${join(DATA_DIR, "db.sqlite")}`);
 
 const shutdown = () => {
   server.stop();

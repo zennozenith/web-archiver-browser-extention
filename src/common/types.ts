@@ -1,5 +1,5 @@
 import { WebRequest } from "webextension-polyfill";
-import { ApiArchiveVersionsResponse, PendingResponseInStorage } from "./reqwest";
+import { ApiArchiveVersionsResponse } from "./reqwest";
 import { LevelSetting } from "./logger";
 
 export type Int = number;
@@ -12,25 +12,9 @@ export interface OverrideUrl {
   url: Url;
 }
 
-export type ErrorType = "generic" | (string & {});
-
-export interface CustomError<T = unknown> {
-  type: string;
-  message: string;
-  extra?: T;
+export interface NonEmptyArray<T> extends Array<T> {
+  0: T;
 }
-
-export interface Ok<T> {
-  ok: true;
-  data: T;
-}
-
-export interface Err<E> {
-  ok: false;
-  error: CustomError<E>;
-}
-
-export type Result<T, E = unknown> = Ok<T> | Err<E>;
 
 export interface Endpoint {
   server: Url;
@@ -88,21 +72,22 @@ export interface Page {
   url: string;
   title: string;
   referrer: string;
-  lang: string | null;
-  charset: string;
-  contentType: string;
-  lastModified: string;
-  canonical: any;
+  lang: string | null; //  eg: "en-US"
+  charset: string; //      eg: "UTF-8",
+  contentType: string; //  eg: "text/html",
+  lastModified: string; // eg: "09/04/2026 17:47:04"
+  canonical: string | null;
+
   favicon: any;
   meta: Record<string, string | null>;
   viewport: {
-    width: number;
-    height: number;
-    dpr: number;
+    width: number; //      eg: 1080
+    height: number; //     eg: 1902
+    dpr: number; //        eg: 1
   };
-  scrollWidth: number;
-  scrollHeight: number;
-  userAgent: string;
+  scrollWidth: number; //  eg: 1902
+  scrollHeight: number; // eg: 23608
+  userAgent: string; //    eg: "Mozilla/5.0 (X11; Linux x86_64; rv:157.0) Gecko/20100101 Firefox/157.0",
   language: string;
 }
 
@@ -112,43 +97,49 @@ export interface BannerOpts {
   mode: "prompt" | "toast" | (string & {});
 }
 
-export interface UnsupportedStatus {
-  state: "unsupported";
-  url: Url;
-  checkedAt: number;
-}
-
-export interface UnconfiguredStatus {
-  state: "unconfigured";
-  url: Url;
-  checkedAt: number;
-}
-
-export interface ErrorStatus {
-  state: "error";
+export interface ArchiveErrorStatus {
+  state: "error" | "unsupported" | "unconfigured";
   url: Url;
   error: string;
   checkedAt: number;
 }
 
-export interface OkStatus extends ApiArchiveVersionsResponse {
+export interface ArchiveOkStatus extends ApiArchiveVersionsResponse {
   state: "ok";
   url: Url;
   checkedAt: number;
 }
 
-export type Status = UnsupportedStatus | UnconfiguredStatus | ErrorStatus | OkStatus;
+export type ArchiveStatus = ArchiveOkStatus | ArchiveErrorStatus;
 
-export interface State {
-  ok: true;
-  configured: {
-    server: boolean;
-    archive: boolean;
-    pending: boolean;
-    check: boolean;
-  };
-  status: Status | null;
-  archiveError: { message: string; time: number } | null;
-  pending: PendingResponseInStorage;
+export interface Configured {
+  server: boolean;
+  archive: boolean;
+  pending: boolean;
+  check: boolean;
   pendingLimit: number;
+  logLevel: LevelSetting;
 }
+
+export interface ApiSuccessArchiveResponse {
+  success: true;
+  message: string;
+  id: Uuid;
+  url: Url;
+  archivedAt: ISODateTime;
+  versionCount: number;
+}
+
+// export interface State {
+//   ok: true;
+//   configured: {
+//     server: boolean;
+//     archive: boolean;
+//     pending: boolean;
+//     check: boolean;
+//   };
+//   status: Status | null;
+//   archiveError: { message: string; time: number } | null;
+//   pending: PendingResponseInStorage;
+//   pendingLimit: number;
+// }

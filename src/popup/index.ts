@@ -1,23 +1,45 @@
-import {
-  formatTime,
-  isArchivable,
-  log as rootLog,
-  normalizeUrl,
-  PendingResponseInStorage,
-  sendToBackground,
-  timeAgo,
-} from "@common/index";
-import type { Int, State, Url } from "@common/types";
+import { EventBus } from "@common/event-bus";
+import { formatTime, isArchivable, log as rootLog, sendToBackground, timeAgo } from "@common/index";
+import type { ArchiveOkStatus, ArchiveStatus, Configured, Url } from "@common/types";
 import browser from "webextension-polyfill";
 
 const log = rootLog.child("popup");
 
-// DOM References
+interface UiEvents {
+  "render:notice": void;
+  "render:currentPage": void;
+  "render:archive": void;
+  "render:archive:ok": { warnings: string[] };
+  "render:archive:error": { errorMessage: string };
+  "render:archive:checking": void;
+  "render:archive:checking:error": { archiveStatus: Exclude<ArchiveStatus, ArchiveOkStatus> };
+  "render:archive:checking:ok": { archiveStatus: ArchiveOkStatus };
+  "error:any": { message: string };
+  "error:any:clear": void;
+}
+
+interface AppEvents {
+  loading: void;
+  loaded: void;
+  "configured:get": void;
+  archive: void;
+  "archive:check": void;
+  "pending:check": void;
+  "pending:refresh": void;
+}
+
+const appBus = new EventBus<AppEvents>();
+const uiBus = new EventBus<UiEvents>();
+
+const appEl = document.getElementById("app") as HTMLElement;
+const spinnerEl = document.getElementById("spinner") as HTMLDivElement;
 const noticePermissionEl = document.getElementById("notice-permission") as HTMLDivElement;
 const btnGrantPermission = document.getElementById("btn-grant-permission") as HTMLButtonElement;
-const noticeNoServerEl = document.getElementById("notice-no-server") as HTMLDivElement;
-const btnOpenOptions = document.getElementById("btn-open-options") as HTMLButtonElement;
+const btnOpenOptions1 = document.getElementById("btn-open-options-1") as HTMLButtonElement;
+const btnOpenOptions2 = document.getElementById("btn-open-options-2") as HTMLButtonElement;
 const errorEndpointEl = document.getElementById("error-endpoint") as HTMLDivElement;
+const errorAnyEl = document.getElementById("error-any") as HTMLDivElement;
+const noticeNoServerEl = document.getElementById("notice-no-server") as HTMLDivElement;
 
 // Current Section DOM Nodes
 const currentUnarchivable = document.getElementById("current-unarchivable") as HTMLDivElement;
@@ -48,83 +70,14 @@ const pendingEmpty = document.getElementById("pending-empty") as HTMLDivElement;
 const pendingList = document.getElementById("pending-list") as HTMLUListElement;
 const pendingOverflow = document.getElementById("pending-overflow") as HTMLDivElement;
 
+let tab: browser.Tabs.Tab,
+  configured: Configured,
+  hasPermission = true,
+  shortcut = "";
+
 function openTab(url: Url) {
   browser.tabs.create({ url });
   window.close();
-}
-
-let tab: browser.Tabs.Tab,
-  state: State,
-  hasPermission = true,
-  shortcut = "",
-  checking = false,
-  archiving = false,
-  refreshing = false,
-  flash = "";
-
-async function recheck() {
-  checking = true;
-  render();
-  log.debug("Rechecking archive status", { tabId: tab?.id, url: tab?.url });
-  const messageResponse = await sendToBackground("CHECK_ARCHIVE", { tabId: tab.id as Int });
-  checking = false;
-
-  if (messageResponse.success === true && messageResponse.data.ok === true) {
-    state.status = messageResponse.data.data;
-  } else {
-    log.warn(
-      "Recheck failed",
-      messageResponse.success ? messageResponse.data : messageResponse.error,
-    );
-  }
-  render();
-}
-
-async function doRefresh() {
-  refreshing = true;
-  render();
-  log.debug("Refreshing pending list");
-  await sendToBackground("REFRESH_PENDING", undefined);
-
-  state = {
-    ...state,
-    ...(await sendToBackground("GET_STATE", { tabId: tab.id as Int })),
-  };
-  refreshing = false;
-  render();
-}
-
-async function doArchive() {
-  archiving = true;
-  flash = "";
-  render();
-  log.info("Archiving current page", { tabId: tab?.id, url: tab?.url });
-  const result = await sendToBackground("ARCHIVE_TAB", { tabId: tab.id as Int });
-  archiving = false;
-
-  if (result.success === true && result.data.ok === true) {
-    state.status = result.data.data.status;
-    state.archiveError = null;
-    flash =
-      "Archived ✓" +
-      (result.data.data.warnings.length
-        ? ` (${result.data.data.warnings.length} warning${result.data.data.warnings.length > 1 ? "s" : ""}: ${result.data.data.warnings.join("; ")})`
-        : "");
-    log.info("Archive finished", {
-      status: result.data.data.status?.state,
-      warnings: result.data.data.warnings,
-    });
-  } else if (result.success === false) {
-    log.error("Archive failed", result.error);
-    state.archiveError = { message: result.error || "Unknown error", time: Date.now() };
-  }
-
-  state = {
-    ...state,
-    ...(await sendToBackground("GET_STATE", { tabId: tab.id as Int })),
-    status: state.status,
-  };
-  render();
 }
 
 function errorBox(msg: string, onClose: () => void = () => {}) {
@@ -145,178 +98,66 @@ function errorBox(msg: string, onClose: () => void = () => {}) {
   return errDiv;
 }
 
-function renderNotice() {
-  noticePermissionEl.classList.toggle("hidden", hasPermission);
+/* ------------------------------------------------------------------ */
+/* App event handlers                                                 */
+/* ------------------------------------------------------------------ */
 
-  const isNotConfiguredAtAll =
-    !state.configured.server &&
-    !state.configured.archive &&
-    !state.configured.pending &&
-    !state.configured.check;
-  noticeNoServerEl.classList.toggle("hidden", !isNotConfiguredAtAll);
+appBus.on("loading", () => {
+  log.debug("appBus:Loading");
+  spinnerEl.classList.remove("hidden");
+  appEl.classList.add("hidden");
+});
 
-  const isMissingServer = !state.configured.server && !isNotConfiguredAtAll;
-  errorEndpointEl.classList.toggle("hidden", !isMissingServer);
-}
+appBus.on("loaded", () => {
+  spinnerEl.classList.add("hidden");
+  appEl.classList.remove("hidden");
+  log.debug("appBus:Loaded");
+});
 
-function renderCurrentPage() {
-  const archivable = tab && isArchivable(tab.url);
-  currentUnarchivable.classList.toggle("hidden", archivable);
-  currentMeta.classList.toggle("hidden", !archivable);
+appBus.once("configured:get", async () => {
+  const stateResult = await sendToBackground("GET_CONFIGURED");
+  if (stateResult.ok === true) {
+    configured = stateResult.data;
+    log.setLevel(configured.logLevel);
 
-  if (archivable) {
-    currentTitle.textContent = tab.title || tab.url || "No Title";
-    currentTitle.title = tab.title || tab.url || "No Title";
-    currentUrl.textContent = tab.url || "No Url";
-    currentUrl.title = tab.url || "No Url";
+    uiBus.emit("error:any:clear");
+    uiBus.emit("render:notice");
+    uiBus.emit("render:currentPage");
 
-    // Status Pill & Recheck Button
-    const s = state.status;
-    if (checking) {
-      currentStatusPill.className = "pill muted";
-      currentStatusPill.textContent = "Checking…";
-    } else if (s?.state === "ok") {
-      if (s.archived) {
-        const count = s.count || s.versions?.length || 1;
-        currentStatusPill.className = "pill ok";
-        currentStatusPill.textContent = `Archived · ${count} version${count === 1 ? "" : "s"}`;
-      } else {
-        currentStatusPill.className = "pill warn";
-        currentStatusPill.textContent = "Not archived";
-      }
-    } else if (s?.state === "error") {
-      currentStatusPill.className = "pill err";
-      currentStatusPill.textContent = "Check failed";
-    } else {
-      currentStatusPill.className = "pill muted";
-      currentStatusPill.textContent = state.configured.check
-        ? "Unknown"
-        : "Status check not configured";
+    const archivable = tab && tab.url !== undefined && isArchivable(tab.url);
+
+    if (archivable) {
+      await appBus.emitAsync("archive:check");
     }
-
-    btnRecheck.classList.toggle("hidden", !state.configured.check);
-    btnRecheck.disabled = checking;
-
-    // Current Error Box
-    currentErrorContainer.innerHTML = "";
-    if (s?.state === "error" && !checking && s.error) {
-      currentErrorContainer.appendChild(errorBox(s.error));
-    }
-
-    // Versions List
-    currentVersionsList.innerHTML = "";
-    if (s?.state === "ok" && s.versions?.length) {
-      currentVersionsList.classList.remove("hidden");
-      const n = s.versions.length;
-      const total = s.count || n;
-
-      s.versions.slice(0, 20).forEach((version, i) => {
-        const li = document.createElement("li");
-
-        if (version.url) {
-          const a = document.createElement("a");
-          a.textContent = `${total - i}`;
-          a.addEventListener("click", () => openTab(version.url));
-          li.appendChild(a);
-        } else {
-          const span = document.createElement("span");
-          span.textContent = version.id ?? `v${total - i}`;
-          li.appendChild(span);
-        }
-
-        const timeSpan = document.createElement("span");
-        timeSpan.textContent = formatTime(version.archivedAt);
-        li.appendChild(timeSpan);
-
-        const agoSpan = document.createElement("span");
-        agoSpan.className = "muted";
-        agoSpan.textContent = timeAgo(version.archivedAt);
-        li.appendChild(agoSpan);
-
-        currentVersionsList.appendChild(li);
-      });
-
-      if (total > 20) {
-        currentVersionsOverflow.classList.remove("hidden");
-        currentVersionsOverflow.textContent = `Showing newest 20 of ${total}`;
-      } else {
-        currentVersionsOverflow.classList.add("hidden");
-      }
-    } else {
-      currentVersionsList.classList.add("hidden");
-      currentVersionsOverflow.classList.add("hidden");
-    }
-
-    // Last Archived notice
-    if (
-      !(s?.state === "ok" && s.versions?.length) &&
-      s?.state === "ok" &&
-      s.archived &&
-      s.lastArchivedAt
-    ) {
-      currentLastArchived.classList.remove("hidden");
-      currentLastArchived.textContent = `Last archived ${formatTime(s.lastArchivedAt)} (${timeAgo(s.lastArchivedAt)})`;
-    } else {
-      currentLastArchived.classList.add("hidden");
-    }
-  }
-
-  // Archive Error Handling
-  if (state.archiveError) {
-    currentErrorContainer.innerHTML = "";
-    currentErrorContainer.appendChild(
-      errorBox("Archive failed: " + state.archiveError.message, async () => {
-        state.archiveError = null;
-        render();
-      }),
-    );
-  }
-
-  // Flash Message
-  if (flash && !state.archiveError) {
-    currentFlash.classList.remove("hidden");
-    currentFlash.textContent = flash;
   } else {
-    currentFlash.classList.add("hidden");
+    log.error("Cannot get state,", stateResult.messages);
+    uiBus.emit("error:any", { message: stateResult.messages.toString() });
   }
+});
 
-  // Archive Button states
-  btnArchive.disabled =
-    archiving || !state.configured.server || !state.configured.archive || !archivable;
-  if (archiving) {
-    btnArchiveText.textContent = "Archiving…";
-  } else if (state.status?.state === "ok" && state.status.archived) {
-    btnArchiveText.textContent = "Archive new version";
-  } else {
-    btnArchiveText.textContent = "Archive this page";
-  }
+appBus.on("pending:check", async () => {
+  const pendingResult = await sendToBackground("GET_PENDING");
+  if (pendingResult.ok === false) {
+    log.error("Cannot get pending, ", pendingResult.messages.toString());
+    uiBus.emit("error:any", { message: pendingResult.messages.toString() });
 
-  if (shortcut && !archiving) {
-    btnArchiveShortcut.textContent = `  (${shortcut})`;
-  } else {
-    btnArchiveShortcut.textContent = "";
-  }
-}
+    currentStatusPill.className = "pill err";
+    currentStatusPill.textContent = "Pending check failed";
 
-function renderPending() {
-  const p = state.pending;
-  pendingHeading.textContent = `Pending${p?.total ? ` (${p.total})` : ""}`;
-
-  if (p?.fetchedAt) {
-    pendingFetchedTime.textContent = timeAgo(p.fetchedAt);
-    pendingFetchedTime.title = formatTime(p.fetchedAt);
-    pendingFetchedTime.classList.remove("hidden");
-  } else {
     pendingFetchedTime.classList.add("hidden");
+    return;
   }
+  const pending = pendingResult.data;
 
-  btnRefreshPending.disabled = refreshing || !state.configured.pending;
-  refreshIcon.classList.toggle("spin", refreshing);
+  pendingHeading.textContent = `Pending(${pending.total})`;
 
-  const isPendingConfigured = state.configured.pending;
-  pendingUnconfigured.classList.toggle("hidden", isPendingConfigured);
+  pendingFetchedTime.textContent = timeAgo(pending.fetchedAt);
+  pendingFetchedTime.title = formatTime(pending.fetchedAt);
+  pendingFetchedTime.classList.remove("hidden");
 
-  if (!isPendingConfigured) {
+  pendingUnconfigured.classList.toggle("hidden", configured.pending);
+
+  if (!configured.pending) {
     pendingErrorContainer.innerHTML = "";
     pendingEmpty.classList.add("hidden");
     pendingList.innerHTML = "";
@@ -326,130 +167,370 @@ function renderPending() {
 
   // Pending Error
   pendingErrorContainer.innerHTML = "";
-  if (p?.error) {
-    pendingErrorContainer.appendChild(errorBox("Pending list: " + p.error));
+  if (pending.error) {
+    pendingErrorContainer.appendChild(errorBox("Pending list: " + pending.error));
   }
 
   // Pending Empty Check
-  const isEmpty = p && !p.items?.length && !p.error;
+  const isEmpty = pending && !pending.items.length && !pending.error;
   pendingEmpty.classList.toggle("hidden", !isEmpty);
 
   // Pending Items List
   pendingList.innerHTML = "";
-  if (p?.items?.length) {
-    p.items.forEach((it: any) => {
+  if (pending.items.length) {
+    pending.items.forEach((it: any) => {
       let label = it.title;
       try {
         const u = new URL(it.url);
         label = label || u.hostname + u.pathname;
       } catch {}
-
       const li = document.createElement("li");
-
       const growDiv = document.createElement("div");
       growDiv.className = "grow";
-
       const titleDiv = document.createElement("div");
       titleDiv.className = "title";
       titleDiv.title = it.title || it.url;
       titleDiv.textContent = label;
       growDiv.appendChild(titleDiv);
-
       const urlDiv = document.createElement("div");
       urlDiv.className = "url";
       urlDiv.title = it.url;
       urlDiv.textContent = it.url + (it.addedAt ? ` · ${timeAgo(it.addedAt)}` : "");
       growDiv.appendChild(urlDiv);
-
       li.appendChild(growDiv);
-
       const actionBtn = document.createElement("button");
       actionBtn.className = "sm";
       actionBtn.title = "Open in a new tab and archive";
       actionBtn.textContent = "Archive";
       actionBtn.addEventListener("click", async () => {
         log.debug("Pending list archive requested", { url: it.url });
+        log.debug("Pending list archive requested", { url: it.url });
         await sendToBackground("OPEN_AND_ARCHIVE", { url: it.url });
         window.close();
       });
       li.appendChild(actionBtn);
-
       pendingList.appendChild(li);
     });
   }
 
   // Overflow notice
-  const hasOverflow = p?.total > p?.items?.length;
+  const hasOverflow = pending.total > pending.items.length;
   pendingOverflow.classList.toggle("hidden", !hasOverflow);
   if (hasOverflow) {
-    pendingOverflow.textContent = `+${p.total - p.items.length} more not shown (see list limit in preferences)`;
+    pendingOverflow.textContent = `+${pending.total - pending.items.length} more not shown (see list limit in preferences)`;
   }
-}
-
-function render() {
-  renderNotice();
-  renderCurrentPage();
-  renderPending();
-}
-
-// Global Event Listeners Wiring
-btnGrantPermission.addEventListener("click", async () => {
-  hasPermission = true;
-  render();
 });
 
-btnOpenOptions.addEventListener("click", () => {
+appBus.on("pending:refresh", async () => {
+  if (!configured.pending) {
+    return;
+  }
+
+  log.debug("Refreshing pending list");
+
+  btnRefreshPending.disabled = true;
+  refreshIcon.classList.toggle("spin", true);
+
+  await sendToBackground("REFRESH_PENDING");
+  appBus.emit("pending:check");
+
+  refreshIcon.classList.toggle("spin", false);
+  btnRefreshPending.disabled = false;
+});
+
+appBus.on("archive", async () => {
+  if (tab.id === undefined) {
+    return;
+  }
+
+  uiBus.emit("render:archive");
+
+  log.info("Archiving current page", { url: tab.url });
+  const archiveResult = await sendToBackground("ARCHIVE_TAB", { tabId: tab.id });
+
+  if (archiveResult.ok === false) {
+    log.error("Archive failed, ", archiveResult.messages.toString());
+    uiBus.emit("error:any", { message: archiveResult.messages.toString() });
+    uiBus.emit("render:archive:error", {
+      errorMessage: archiveResult.messages.toLocaleString() || "Unknown error",
+    });
+
+    return;
+  }
+
+  const archive = archiveResult.data;
+  log.info("Archive finished", {
+    archive,
+    warnings: structuredClone(archive.warnings),
+  });
+
+  uiBus.emit("render:archive:ok", { warnings: archive.warnings });
+  await appBus.emitAsync("archive:check");
+});
+
+appBus.on("archive:check", async () => {
+  if (tab.id === undefined) {
+    return;
+  }
+
+  uiBus.emit("render:archive:checking");
+
+  const archiveStatusResult = await sendToBackground("GET_ARCHIVE", { tabId: tab.id });
+  if (archiveStatusResult.ok === false) {
+    log.error("Cannot get archive status, ", archiveStatusResult.messages.toString());
+    uiBus.emit("error:any", { message: archiveStatusResult.messages.toString() });
+    return;
+  }
+
+  const archiveStatus = archiveStatusResult.data;
+
+  // Status Pill & Recheck Button
+  if (archiveStatus.state !== "ok") {
+    uiBus.emit("render:archive:checking:error", { archiveStatus });
+    return;
+  }
+
+  uiBus.emit("render:archive:checking:ok", { archiveStatus });
+});
+
+/* ------------------------------------------------------------------ */
+/* UI event handlers                                                  */
+/* ------------------------------------------------------------------ */
+
+uiBus.on("error:any:clear", () => {
+  errorAnyEl.textContent = "";
+  errorAnyEl.classList.add("hidden");
+});
+
+uiBus.on("error:any", ({ message }) => {
+  errorAnyEl.textContent = message;
+  errorAnyEl.classList.remove("hidden");
+});
+
+uiBus.on("render:notice", () => {
+  noticePermissionEl.classList.toggle("hidden", hasPermission);
+
+  const isNotConfiguredAtAll =
+    !configured.server && !configured.archive && !configured.pending && !configured.check;
+  noticeNoServerEl.classList.toggle("hidden", !isNotConfiguredAtAll);
+
+  const isMissingServer = !configured.server && !isNotConfiguredAtAll;
+  errorEndpointEl.classList.toggle("hidden", !isMissingServer);
+});
+
+uiBus.on("render:currentPage", () => {
+  if (tab.url === undefined) {
+    return;
+  }
+
+  const archivable = tab && isArchivable(tab.url);
+  currentUnarchivable.classList.toggle("hidden", archivable);
+  currentMeta.classList.toggle("hidden", !archivable);
+  // btnArchive.disabled = archiving || !configured.server || !configured.archive || !archivable;
+
+  if (shortcut) {
+    btnArchiveShortcut.textContent = `  (${shortcut})`;
+  } else {
+    btnArchiveShortcut.textContent = "";
+  }
+
+  currentTitle.textContent = tab.title || tab.url || "No Title";
+  currentTitle.title = tab.title || tab.url || "No Title";
+  currentUrl.textContent = tab.url || "No Url";
+  currentUrl.title = tab.url || "No Url";
+});
+
+uiBus.on("render:archive:checking", () => {
+  currentStatusPill.className = "pill muted";
+  currentStatusPill.textContent = "Checking…";
+  btnRecheck.disabled = true;
+});
+
+uiBus.on("render:archive:checking:error", ({ archiveStatus }) => {
+  btnRecheck.disabled = false;
+
+  switch (archiveStatus.state) {
+    case "error":
+      currentStatusPill.className = "pill err";
+      currentStatusPill.textContent = archiveStatus.error;
+
+      currentErrorContainer.innerHTML = "";
+      currentErrorContainer.appendChild(errorBox(archiveStatus.error));
+      break;
+    case "unsupported":
+      currentStatusPill.className = "pill muted";
+      currentStatusPill.textContent = configured.check ? "Unknown" : "Status check unsupported";
+      break;
+    case "unconfigured":
+      currentStatusPill.className = "pill muted";
+      currentStatusPill.textContent = configured.check
+        ? "Unknown"
+        : "Archive status check unconfigured";
+      break;
+  }
+});
+
+uiBus.on("render:archive:checking:ok", ({ archiveStatus }) => {
+  btnRecheck.disabled = false;
+
+  if (archiveStatus.archived) {
+    const count = archiveStatus.count || archiveStatus.versions.length || 1;
+    currentStatusPill.className = "pill ok";
+    currentStatusPill.textContent = `Archived · ${count} version${count === 1 ? "" : "s"}`;
+  } else {
+    currentStatusPill.className = "pill warn";
+    currentStatusPill.textContent = "Not archived";
+  }
+
+  // Versions List
+  currentVersionsList.innerHTML = "";
+
+  if (archiveStatus.versions.length === 0 || !archiveStatus.archived) {
+    currentVersionsList.classList.add("hidden");
+    currentVersionsOverflow.classList.add("hidden");
+    currentLastArchived.classList.add("hidden");
+    btnArchiveText.textContent = "Archive this page";
+    return;
+  }
+
+  currentVersionsList.classList.remove("hidden");
+  const n = archiveStatus.versions.length;
+  const total = archiveStatus.count || n;
+
+  archiveStatus.versions.slice(0, 20).forEach((version, i) => {
+    const li = document.createElement("li");
+
+    if (version.url) {
+      const a = document.createElement("a");
+      a.textContent = `${total - i}`;
+      a.addEventListener("click", () => openTab(version.url));
+      li.appendChild(a);
+    } else {
+      const span = document.createElement("span");
+      span.textContent = version.id ?? `v${total - i}`;
+      li.appendChild(span);
+    }
+
+    const timeSpan = document.createElement("span");
+    timeSpan.textContent = formatTime(version.archivedAt);
+    li.appendChild(timeSpan);
+
+    const agoSpan = document.createElement("span");
+    agoSpan.className = "muted";
+    agoSpan.textContent = timeAgo(version.archivedAt);
+    li.appendChild(agoSpan);
+
+    currentVersionsList.appendChild(li);
+  });
+
+  if (total > 20) {
+    currentVersionsOverflow.classList.remove("hidden");
+    currentVersionsOverflow.textContent = `Showing newest 20 of ${total}`;
+  } else {
+    currentVersionsOverflow.classList.add("hidden");
+  }
+
+  // Last Archived notice
+  currentLastArchived.classList.remove("hidden");
+  currentLastArchived.textContent = `Last archived ${formatTime(archiveStatus?.lastArchivedAt)} (${timeAgo(archiveStatus?.lastArchivedAt)})`;
+  btnArchiveText.textContent = "Archive new version";
+});
+
+uiBus.on("render:archive", () => {
+  btnArchiveText.textContent = "Archiving…";
+  // btnArchive.disabled = archiving || !configured.server || !configured.archive || !archivable;
+  btnArchive.disabled = true;
+});
+
+uiBus.on("render:archive:error", ({ errorMessage }) => {
+  btnArchive.disabled = false;
+  currentStatusPill.className = "pill err";
+  currentStatusPill.textContent = "Archive Failed";
+  btnArchiveText.textContent = "Archive Failed";
+
+  currentErrorContainer.innerHTML = "";
+  currentErrorContainer.appendChild(errorBox(`Archive failed: ${errorMessage}`));
+  // failedAt: Date.now(),
+});
+
+uiBus.on("render:archive:ok", ({ warnings }) => {
+  btnArchive.disabled = false;
+  btnArchiveText.textContent = "Archive new version";
+
+  const flash =
+    "Archived ✓" +
+    (warnings.length
+      ? ` (${warnings.length} warning${warnings.length > 1 ? "s" : ""}: ${warnings.join("; ")})`
+      : "");
+
+  // Flash Message
+  if (flash) {
+    currentFlash.classList.remove("hidden");
+    currentFlash.textContent = flash;
+  } else {
+    currentFlash.classList.add("hidden");
+  }
+});
+
+btnGrantPermission.addEventListener("click", async () => {
+  hasPermission = true;
+  uiBus.emit("render:notice");
+});
+btnRecheck.addEventListener("click", async () => await appBus.emitAsync("archive:check"));
+btnRefreshPending.addEventListener("click", async () => await appBus.emitAsync("pending:refresh"));
+btnArchive.addEventListener("click", async () => await appBus.emitAsync("archive"));
+btnOpenOptions1.addEventListener("click", () => {
+  browser.runtime.openOptionsPage();
+  window.close();
+});
+btnOpenOptions2.addEventListener("click", () => {
   browser.runtime.openOptionsPage();
   window.close();
 });
 
-btnRecheck.addEventListener("click", recheck);
-btnRefreshPending.addEventListener("click", doRefresh);
-btnArchive.addEventListener("click", doArchive);
-
 document.addEventListener("DOMContentLoaded", async () => {
+  await appBus.emitAsync("loading");
+
   [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  if (tab) log.debug("Popup opened", { tabId: tab.id, url: tab.url, title: tab.title });
+  if (tab) {
+    log.debug("Popup opened", { tabId: tab.id, url: tab.url, title: tab.title });
+  }
 
   try {
     hasPermission = await browser.permissions.contains({ origins: ["<all_urls>"] });
   } catch {
-    hasPermission = true;
+    hasPermission = true; // TODO: false?
   }
 
   try {
     shortcut =
       (await browser.commands.getAll()).find((c) => c.name === "archive-page")?.shortcut || "";
   } catch {}
-  const stateResponse = await sendToBackground("GET_STATE", { tabId: tab.id as Int });
-  if (stateResponse.success === false) {
-    log.error("GET_STATE failed", stateResponse.error);
-  } else {
-    state = stateResponse.data;
-  }
 
-  render();
+  await appBus.emitAsync("configured:get");
+  await appBus.emitAsync("pending:check");
 
-  const stale =
-    !state.status ||
-    state.status.url !== normalizeUrl(tab?.url ?? "") ||
-    Date.now() - (state.status.checkedAt || 0) > 60000;
+  appBus.emit("loaded");
+  // const stale =
+  //   !state.status ||
+  //   state.status.url !== normalizeUrl(tab?.url ?? "") ||
+  //   Date.now() - (state.status.checkedAt || 0) > 60000;
 
-  if (tab && isArchivable(tab.url ?? "") && state.configured.check && stale) {
-    recheck();
-  }
+  // if (tab && isArchivable(tab.url ?? "") && state.configured.check && stale) {
+  //   recheck();
+  // }
 
-  if (
-    state.configured.pending &&
-    (!state.pending || Date.now() - (state.pending.fetchedAt || 0) > 60000)
-  ) {
-    doRefresh();
-  }
+  // if (
+  //   state.configured.pending &&
+  //   (!state.pending || Date.now() - (state.pending.fetchedAt || 0) > 60000)
+  // ) {
+  //   doRefresh();
+  // }
 
-  browser.storage.onChanged.addListener((ch, area) => {
-    if (area === "local" && ch.pending) {
-      state.pending = ch.pending.newValue as PendingResponseInStorage;
-      render();
-    }
-  });
+  // browser.storage.onChanged.addListener((ch, area) => {
+  //   if (area === "local" && ch.pending) {
+  //     state.pending = ch.pending.newValue as PendingResponseInStorage;
+  //     render();
+  //   }
+  // });
 });

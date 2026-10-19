@@ -1,6 +1,8 @@
 import browser from "webextension-polyfill";
-import type { Int, Result, State, Status, Url } from "./types.ts";
+import type { ArchiveStatus, Configured, Int, Url } from "./types.ts";
 import { log as rootLog } from "./log.ts";
+import { Result } from "./error.ts";
+import { ApiSuccessArchiveResponse, PendingResponseInStorage } from "./reqwest.ts";
 
 const log = rootLog.child("messaging");
 
@@ -11,27 +13,22 @@ export type Empty = Record<string, never>;
  * a successful response carries.
  */
 export interface MessageMap {
-  GET_STATE: { payload: { tabId: Int }; data: State };
+  GET_CONFIGURED: { payload: undefined; data: Configured };
+  GET_ARCHIVE: { payload: { tabId: Int }; data: ArchiveStatus };
+  GET_PENDING: { payload: undefined; data: PendingResponseInStorage };
   ARCHIVE_TAB: {
     payload: { tabId: Int };
-    data: Result<{
-      status: Status | null;
-      response: string | { ok: boolean };
+    data: {
+      response: ApiSuccessArchiveResponse;
       warnings: string[];
-    }>;
-  };
-  CHECK_ARCHIVE: { payload: { tabId: Int }; data: Result<Status> };
-  ARCHIVE_FROM_PAGE: {
-    payload: undefined;
-    data: Result<{
-      status: Status | null;
-      response: string | { ok: boolean };
-      warnings: string[];
-    }>;
+    };
   };
   REFRESH_PENDING: { payload: undefined; data: { ok: boolean } };
   OPEN_AND_ARCHIVE: { payload: { url: Url }; data: void };
-  CLEAR_ARCHIVE_ERROR: { payload: { tabId: Int }; data: { ok: true } };
+  ARCHIVE_FROM_PAGE: {
+    payload: undefined;
+    data: ArchiveStatus;
+  };
 }
 
 export type MessageType = keyof MessageMap;
@@ -42,18 +39,6 @@ export type MessageData<T extends MessageType> = MessageMap[T]["data"];
 export type Message<T extends MessageType = MessageType> = {
   [K in T]: { type: K; payload: MessagePayload<K> };
 }[T];
-
-export interface ErrorMessageResponse {
-  success: false;
-  error: string;
-}
-
-export interface OkMessageResponse<T = unknown> {
-  success: true;
-  data: T;
-}
-
-export type MessageResponse<T> = OkMessageResponse<T> | ErrorMessageResponse;
 
 /** Payload is optional only for messages whose payload is `undefined`. */
 type PayloadArgs<T extends MessageType> =
@@ -66,30 +51,40 @@ type PayloadArgs<T extends MessageType> =
 export async function sendToBackground<T extends MessageType>(
   type: T,
   ...args: PayloadArgs<T>
-): Promise<MessageResponse<MessageData<T>>> {
+): Promise<Result<MessageData<T>>> {
   const message = { type, payload: args[0] } as Message<T>;
   log.debug(`message:${type} →`, args[0]);
   try {
     const response: unknown = await browser.runtime.sendMessage(message);
     if (!isMessageResponse<MessageData<T>>(response)) {
       log.error(`message:${type} No/invalid response received`, response);
-      return { success: false, error: "No response received" };
+      return { ok: false, messages: ["No response received"], extra: [] };
     }
     log.debug(`message:${type} ← ok`);
     return response;
   } catch (err) {
     log.error(`message:${type} send failed`, err);
     return {
-      success: false,
-      error: err instanceof Error ? err.message : String(err),
+      ok: false,
+      messages: [err instanceof Error ? err.message : String(err)],
+      extra: [err instanceof Error ? err : {}],
     };
   }
 }
 
-function isMessageResponse<D>(value: unknown): value is MessageResponse<D> {
-  if (typeof value !== "object" || value === null || !("success" in value)) {
+function isMessageResponse<D>(value: unknown): value is Result<D> {
+  if (typeof value !== "object" || value === null || !("ok" in value)) {
     return false;
   }
-  const v = value as { success: unknown; error?: unknown };
-  return v.success === true || (v.success === false && typeof v.error === "string");
+
+  const v = value as { ok: unknown; messages?: unknown; extra?: unknown };
+
+  return (
+    v.ok === true ||
+    (v.ok === false &&
+      Array.isArray(v.extra) &&
+      Array.isArray(v.messages) &&
+      v.messages.length > 0 &&
+      v.messages.every((el): el is string => typeof el === "string"))
+  );
 }
