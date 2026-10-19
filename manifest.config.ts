@@ -44,6 +44,12 @@ export default defineManifest(async (env) => {
       page: "src/options/index.html",
       open_in_tab: true,
     },
+    // content_scripts: [
+    //   {
+    //     matches: ["<all_urls>"],
+    //     js: ["src/background/page.ts"],
+    //   },
+    // ],
   };
 
   if (isFirefox) {

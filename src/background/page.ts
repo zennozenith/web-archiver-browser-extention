@@ -1,4 +1,5 @@
-import { BannerOpts, Page } from "@common/types";
+import { MessageResponse } from "@common/messaging";
+import { BannerOpts, Page, Result, Status } from "@common/types";
 
 /**
  * runs inside the page
@@ -41,8 +42,9 @@ export function collectPage(): Page {
 
 /* ================= in-page banner (prompt / toast) ================= */
 export function pageBanner(opts: BannerOpts) {
+  const api = typeof browser !== "undefined" ? browser : chrome;
+
   // self-contained: serialized into the page
-  const api = globalThis.browser ?? globalThis.chrome;
   const ID = "__url_archiver_banner__";
   document.getElementById(ID)?.remove();
   const host = document.createElement("div");
@@ -82,30 +84,43 @@ export function pageBanner(opts: BannerOpts) {
       box.append(row);
     }
   }
-  const archive = () => {
+  const archive = async () => {
     render("", "Archiving…", []);
-    api.runtime
-      .sendMessage({ type: "archiveFromPage" })
-      .then((r) => {
-        if (r && r.ok) {
-          const n = r.status && r.status.count;
-          render("ok", "Archived ✓" + (n ? ` (${n} version${n === 1 ? "" : "s"})` : ""), [
-            ["Close", close],
-          ]);
-          timer = setTimeout(close, 5000);
-        } else
-          render("err", "Archive failed: " + ((r && r.error) || "unknown error"), [
-            ["Close", close],
-          ]);
-      })
-      .catch((e) => render("err", "Archive failed: " + e.message, [["Close", close]]));
+
+    const result: MessageResponse<
+      Result<{
+        status: Status | null;
+        response: string | { ok: boolean };
+        warnings: string[];
+      }>
+    > = await api.runtime.sendMessage({
+      type: "ARCHIVE_FROM_PAGE",
+    });
+
+    if (
+      result.success === true &&
+      result.data.ok === true &&
+      result.data.data.status &&
+      result.data.data.status.state === "ok"
+    ) {
+      const count = result.data.data.status.count;
+
+      render("ok", "Archived ✓" + (count ? ` (${count} version${count === 1 ? "" : "s"})` : ""), [
+        ["Close", close],
+      ]);
+
+      timer = setTimeout(close, 5000);
+    } else {
+      render("err", `Archive failed: ${JSON.stringify(result, null, 2)}`, [["Close", close]]);
+    }
   };
-  if (opts.mode === "prompt")
+
+  if (opts.mode === "prompt") {
     render("", opts.text || "Archive this page?", [
       ["Dismiss", close],
       ["Archive now", archive, true],
     ]);
-  else {
+  } else {
     render(opts.kind, opts.text, [["Close", close]]);
     if (opts.kind === "ok") timer = setTimeout(close, 5000);
   }

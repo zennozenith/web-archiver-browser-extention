@@ -51,9 +51,12 @@ const logCapture = log.child("capture");
    in this (service worker) console. */
 receiveForwardedLogsInBackground();
 
+const ENGINE = typeof browser.tabs.captureTab === "function" ? "gecko" : "blink";
+const EXTENSION_VERSION = browser.runtime.getManifest().version;
+
 log.info("Service worker / background script initialized", {
-  version: browser.runtime.getManifest().version,
-  engine: typeof browser.tabs.captureTab === "function" ? "gecko" : "blink",
+  version: EXTENSION_VERSION,
+  engine: ENGINE,
 });
 
 const ALARM = "refresh-pending";
@@ -634,10 +637,11 @@ async function archiveWithFeedback(
 async function openAndArchive(url: Url) {
   const tab = await browser.tabs.create({ url, active: true });
   logCapture.info("Opened new tab for direct archive", { url, tabId: tab.id });
-  await session_storage_set("open:" + tab.id, { url, at: Date.now() });
+  await session_storage_set(`open:${tab.id}`, { url, at: Date.now() });
 }
+
 async function handleOpened(tabId: Int) {
-  await session_storage_delete("open:" + tabId);
+  await session_storage_delete(`open:${tabId}`);
   const s = await getExtentionSettings();
   await sleep(Math.max(0, Number(s.directArchiveDelaySec) || 0) * 1000);
   try {
@@ -647,8 +651,11 @@ async function handleOpened(tabId: Int) {
     return;
   }
   logCapture.debug(`Direct-archive mode: ${s.directArchiveMode}`, { tabId });
-  if (s.directArchiveMode === "auto") archiveWithFeedback(tabId, { toast: true });
-  else injectBanner(tabId, { kind: "", mode: "prompt", text: "Archive this page?" });
+  if (s.directArchiveMode === "auto") {
+    archiveWithFeedback(tabId, { toast: true });
+  } else {
+    injectBanner(tabId, { kind: "", mode: "prompt", text: "Archive this page?" });
+  }
 }
 
 /* ================= ================= ================= */
@@ -695,8 +702,9 @@ browser.tabs.onUpdated.addListener(async (tabId, change, tab) => {
   const loaded = change.status === "complete" || (change.url && tab.status === "complete");
   if (!loaded || !isArchivable(tab.url)) return;
   logWebReq.debug("Page load complete", { tabId, url: tab.url });
-  if (change.status === "complete" && (await session_storage_get("open:" + tabId)))
+  if (change.status === "complete" && (await session_storage_get(`open:${tabId}`))) {
     handleOpened(tabId);
+  }
   const extentionSettings = await getExtentionSettings();
   if (extentionSettings.autoCheck) checkArchiveVersion(tabId);
 });
@@ -704,9 +712,13 @@ browser.tabs.onUpdated.addListener(async (tabId, change, tab) => {
 browser.tabs.onActivated.addListener(async ({ tabId }) => {
   const st = await session_storage_get("status:" + tabId);
   if (st) return;
+
+  logCheck.debug("Tab activated with no cached status, re-checking", { tabId });
+
   const extentionSettings = await getExtentionSettings();
-  if (extentionSettings.autoCheck) {
-    logCheck.debug("Tab activated with no cached status, re-checking", { tabId });
+  const tab = await browser.tabs.get(tabId);
+
+  if (extentionSettings.autoCheck && tab.url !== "") {
     checkArchiveVersion(tabId);
   }
 });
@@ -781,7 +793,7 @@ browser.webRequest.onSendHeaders.addListener(
     urls: ["http://*/*", "https://*/*"],
     types: ["main_frame"],
   },
-  ["requestHeaders", "extraHeaders"],
+  ENGINE === "gecko" ? ["requestHeaders"] : ["requestHeaders", "extraHeaders"],
 );
 
 browser.webRequest.onHeadersReceived.addListener(
@@ -805,7 +817,7 @@ browser.webRequest.onHeadersReceived.addListener(
     urls: ["http://*/*", "https://*/*"],
     types: ["main_frame"],
   },
-  ["responseHeaders", "extraHeaders"],
+  ENGINE === "gecko" ? ["responseHeaders"] : ["responseHeaders", "extraHeaders"],
 );
 
 ensureAlarm();

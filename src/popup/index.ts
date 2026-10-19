@@ -281,7 +281,8 @@ function renderCurrentPage() {
   }
 
   // Archive Button states
-  btnArchive.disabled = archiving || !state.configured.server || !state.configured.archive;
+  btnArchive.disabled =
+    archiving || !state.configured.server || !state.configured.archive || !archivable;
   if (archiving) {
     btnArchiveText.textContent = "Archiving…";
   } else if (state.status?.state === "ok" && state.status.archived) {
@@ -407,7 +408,6 @@ btnRefreshPending.addEventListener("click", doRefresh);
 btnArchive.addEventListener("click", doArchive);
 
 document.addEventListener("DOMContentLoaded", async () => {
-  // try {
   [tab] = await browser.tabs.query({ active: true, currentWindow: true });
   if (tab) log.debug("Popup opened", { tabId: tab.id, url: tab.url, title: tab.title });
 
@@ -452,9 +452,4 @@ document.addEventListener("DOMContentLoaded", async () => {
       render();
     }
   });
-
-  // } catch (e) {
-  //   $app.replaceChildren(errorBox("Popup error: " + e.message));
-  //   console.error(e);
-  // }
 });

@@ -1,7 +1,7 @@
 {
   "name": "myopic-web-extention",
   "displayName": "Web Archiver",
-  "version": "0.0.3.4",
+  "version": "0.0.3.16",
   "private": true,
   "description": "Archive pages (HTML, screenshot, headers, metadata) to your own archive server.",
   "type": "module",
