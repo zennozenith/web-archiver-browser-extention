@@ -1,7 +1,7 @@
 {
   "name": "myopic-web-extention",
   "displayName": "Web Archiver",
-  "version": "0.0.3.0",
+  "version": "0.0.3.4",
   "private": true,
   "description": "Archive pages (HTML, screenshot, headers, metadata) to your own archive server.",
   "type": "module",
@@ -16,13 +16,16 @@
     "lint:firefox": "web-ext lint --source-dir dist/firefox",
     "start:firefox": "web-ext run --source-dir dist/firefox",
     "preview": "vp preview",
-    "prepare": "vp config"
+    "prepare": "vp config",
+    "mock:start": "bun run server.ts",
+    "mock:dev": "bun --watch server.ts"
   },
   "dependencies": {
     "webextension-polyfill": "^0.12.0"
   },
   "devDependencies": {
     "@crxjs/vite-plugin": "^3.0.0",
+    "@types/bun": "^1.4.3",
     "@types/chrome": "^0.3.5",
     "@types/node": "^26.6.5",
     "@types/webextension-polyfill": "^0.12.6",

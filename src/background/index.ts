@@ -17,11 +17,9 @@ import {
   sha256,
   Status,
   Url,
-  bgLog as log,
   Result,
   getEndpoint,
   HeadersDetails,
-  ApiSuccessResponse,
   ApiArchiveVersionsResponse,
   ApiCheckPendingResponse,
   PendingResponseInStorage,
@@ -31,12 +29,32 @@ import {
   MessageResponse,
   Message,
   State,
+  log as rootLog,
+  receiveForwardedLogsInBackground,
+  ApiSuccessArchiveResponse,
 } from "@common/index";
 import { collectPage, pageBanner } from "./page";
 import { createError, createOk, isStandardError } from "@common/error";
 import { WebRequest } from "webextension-polyfill";
 
-log.info("Service worker / background script initialized");
+/* ── per-subsystem child loggers (context tag "background" is added automatically) ── */
+const log = rootLog.child("bg");
+const logMsg = log.child("msg");
+const logWebReq = log.child("webrequest");
+const logBadge = log.child("badge");
+const logCheck = log.child("check");
+const logPending = log.child("pending");
+const logArchive = log.child("archive");
+const logCapture = log.child("capture");
+
+/* Popup/options pages forward their log entries here so everything shows up
+   in this (service worker) console. */
+receiveForwardedLogsInBackground();
+
+log.info("Service worker / background script initialized", {
+  version: browser.runtime.getManifest().version,
+  engine: typeof browser.tabs.captureTab === "function" ? "gecko" : "blink",
+});
 
 const ALARM = "refresh-pending";
 const SENSITIVE = new Set(["cookie", "authorization", "proxy-authorization", "set-cookie"]);
@@ -50,7 +68,7 @@ async function injectBanner(tabId: Int, opts: BannerOpts): Promise<void> {
   try {
     await browser.scripting.executeScript({ target: { tabId }, func: pageBanner, args: [opts] });
   } catch {
-    log.warn("restricted page! cannot inject banner");
+    log.warn("restricted page, cannot inject banner", { tabId, mode: opts.mode });
   }
 }
 
@@ -119,8 +137,9 @@ async function updateBadge({
     await browser.action.setBadgeText({ tabId, text });
     if (color) await browser.action.setBadgeBackgroundColor({ tabId, color });
     if (title) await browser.action.setTitle({ tabId, title });
+    logBadge.debug("Badge updated", { tabId, text });
   } catch (err) {
-    log.warn("[Background] Could not update badge:", err);
+    logBadge.warn("Could not update badge", { tabId, text }, err);
   }
 }
 
@@ -142,7 +161,7 @@ function applyStatusBadge(tabId: Int, status: Status | null): Promise<void> {
     });
   if (status.archived) {
     const n = status.count || status.versions?.length || 0;
-    const when = status.versions?.[0]?.time ?? status.last;
+    const when = status.versions?.[0]?.archivedAt ?? status.lastArchivedAt;
     return updateBadge({
       tabId,
       text: n ? (n > 99 ? "99+" : String(n)) : "✓",
@@ -165,13 +184,14 @@ async function checkArchiveVersion(tabId: Int): Promise<Result<Status>> {
     tab = await browser.tabs.get(tabId);
   } catch (e) {
     return createError({
-      log,
+      log: logCheck,
       message: `Cannot check tab with id: ${tabId}`,
       extra: e,
     });
   }
 
   if (!isArchivable(tab.url)) {
+    logCheck.debug("URL not archivable, clearing status", { tabId, url: tab.url });
     await session_storage_delete(`status:${tabId}`);
     applyStatusBadge(tabId, null);
     return createOk({ state: "unsupported", url: tab.url as Url, checkedAt: Date.now() });
@@ -182,6 +202,7 @@ async function checkArchiveVersion(tabId: Int): Promise<Result<Status>> {
   const url = normalizeUrl(tab.url as Url);
 
   if (!endpoint.check) {
+    logCheck.debug("Check endpoint not configured", { tabId, url });
     const status: Status = { state: "unconfigured", url, checkedAt: Date.now() };
     await session_storage_set(`status:${tabId}`, status);
     applyStatusBadge(tabId, status);
@@ -190,12 +211,15 @@ async function checkArchiveVersion(tabId: Int): Promise<Result<Status>> {
 
   const key = `${tabId}|${url}` as const;
   if (inflight.has(key)) {
+    logCheck.debug("Joining in-flight status check", { tabId, url });
     const status = await inflight.get(key)!;
     return status;
   }
 
   const inflightStatusPromise: Promise<Result<Status>> = (async () => {
     let status: Status;
+    logCheck.debug("Checking archive status", { tabId, url });
+    const done = logCheck.time("status check");
     try {
       const data = await request<ApiArchiveVersionsResponse>(buildCheckUrl(endpoint.check, url), {
         token: extentionSettings.apiToken,
@@ -206,6 +230,7 @@ async function checkArchiveVersion(tabId: Int): Promise<Result<Status>> {
       } else {
         status = { state: "ok", url, checkedAt: Date.now(), ...data.data };
       }
+      done(status.state);
     } catch (e) {
       const errorMessage = isStandardError(e) ? e.message : String(e);
       status = {
@@ -216,6 +241,10 @@ async function checkArchiveVersion(tabId: Int): Promise<Result<Status>> {
       };
     }
 
+    logCheck[status.state === "error" ? "warn" : "debug"](
+      `Archive status: ${status.state}`,
+      status,
+    );
     await session_storage_set("status:" + tabId, status);
     applyStatusBadge(tabId, status);
     return createOk(status);
@@ -238,12 +267,15 @@ function refreshPending(): Promise<Result<ApiCheckPendingResponse> | null> {
     };
 
     if (!endpoint.pending) {
+      logPending.debug("Pending endpoint not configured");
       await browser.storage.local.set({
         pending: { items: [], total: 0, fetchedAt: Date.now(), error: null },
       });
       return null;
     }
     try {
+      logPending.debug("Refreshing pending list");
+      const done = logPending.time("pending refresh");
       const data = await request<ApiCheckPendingResponse>(endpoint.pending, {
         token: extentionSettings.apiToken,
         timeoutMs: 20000,
@@ -253,6 +285,14 @@ function refreshPending(): Promise<Result<ApiCheckPendingResponse> | null> {
       }
 
       const pending = data.data;
+      done({
+        fetched: pending.items.length,
+        total: pending.total,
+        limit: extentionSettings.pendingLimit,
+      });
+      logPending.debug(
+        `Pending list refreshed: ${pending.items.length} item${pending.items.length === 1 ? "" : "s"}`,
+      );
       await browser.storage.local.set({
         pending: {
           items: pending.items.slice(0, extentionSettings.pendingLimit),
@@ -264,6 +304,7 @@ function refreshPending(): Promise<Result<ApiCheckPendingResponse> | null> {
       return data;
     } catch (e) {
       const errorMessage = isStandardError(e) ? e.message : String(e);
+      logPending.warn("Pending list refresh failed", errorMessage);
       await browser.storage.local.set({
         pending: {
           items: previousPending?.items || [],
@@ -273,7 +314,7 @@ function refreshPending(): Promise<Result<ApiCheckPendingResponse> | null> {
         },
       });
       return createError({
-        log,
+        log: logPending,
         message: errorMessage,
         extra: e,
       });
@@ -332,35 +373,43 @@ async function takeScreenshot(
 async function archiveTab(tabId: Int): Promise<
   Result<{
     status: Status | null;
-    response: string | { ok: boolean };
+    response: Result<ApiSuccessArchiveResponse, string>;
     warnings: string[];
   }>
 > {
   if (busyTabs.has(tabId)) {
-    return createError({ log, message: "An archive is already in progress for this tab" });
+    return createError({
+      log: logArchive,
+      message: "An archive is already in progress for this tab",
+      extra: { tabId },
+    });
   }
 
   busyTabs.add(tabId);
+  const measure = logArchive.time("archive tab");
 
   try {
     await session_storage_delete(`archiveError:${tabId}`);
 
     const extensionSettings = await getExtentionSettings();
-    if (!extensionSettings.serverUrl) {
+    const endpoint = getEndpoint(extensionSettings);
+    if (!endpoint.server || !endpoint.archive) {
+      logArchive.debug("Server/Archive URL not configured");
       return createError({
-        log,
-        message: "Server URL is not configured. Open the extension preferences.",
+        log: logArchive,
+        message: "Server/Archive URL is not configured. Open the extension preferences.",
       });
     }
 
     const tab = await browser.tabs.get(tabId);
     if (!isArchivable(tab.url)) {
       return createError({
-        log,
+        log: logArchive,
         message: "Only http(s) pages can be archived.",
         extra: { url: tab.url },
       });
     }
+    logArchive.info("Archiving page", { tabId, url: tab.url, title: tab.title });
 
     await updateBadge({
       tabId,
@@ -370,19 +419,21 @@ async function archiveTab(tabId: Int): Promise<
     });
 
     let results: browser.Scripting.InjectionResult[];
+    const doneCollect = logArchive.time("collect page");
     try {
       results = await browser.scripting.executeScript({ target: { tabId }, func: collectPage });
     } catch (e) {
       const errorMessage = isStandardError(e) ? e.message : e;
       return createError({
-        log,
+        log: logArchive,
         message: `Could not read the page (${errorMessage}). If this is Firefox, make sure site access is granted in the preferences.`,
       });
     }
+    doneCollect(`fetch ${results?.[0]?.result ? "ok" : "empty"}`);
     const page = results?.[0]?.result as Page | undefined;
     if (!page) {
       return createError({
-        log,
+        log: logArchive,
         message: "Could not read the page content.",
       });
     }
@@ -392,10 +443,12 @@ async function archiveTab(tabId: Int): Promise<
 
     if (extensionSettings.includeScreenshot) {
       try {
+        const doneShot = logArchive.time("screenshot");
         screenshot = await takeScreenshot(tab, extensionSettings, page, warnings);
+        if (screenshot) doneShot(screenshot.ext, screenshot.blob.size);
       } catch (e) {
         const errorMessage = isStandardError(e) ? e.message : e;
-        log.warn(`Screenshot failed: ${errorMessage}`);
+        logArchive.warn(`Screenshot failed: ${errorMessage}`);
         warnings.push(`Screenshot failed: ${errorMessage}`);
       }
     }
@@ -476,8 +529,12 @@ async function archiveTab(tabId: Int): Promise<
       formData.append("screenshot", screenshot.blob, `screenshot.${screenshot.ext}`);
     }
 
-    const endpoint = getEndpoint(extensionSettings);
-    const response = await request<ApiSuccessResponse>(endpoint.server, {
+    logArchive.info("Uploading archive", {
+      url: page.url,
+      htmlBytes: htmlBlob.size,
+      screenshotBytes: screenshot?.blob.size ?? null,
+    });
+    const response = await request<ApiSuccessArchiveResponse>(endpoint.archive, {
       method: "POST",
       body: formData,
       token: extensionSettings.apiToken,
@@ -487,21 +544,29 @@ async function archiveTab(tabId: Int): Promise<
     const resultStatus = await checkArchiveVersion(tabId); // refresh version info/badge
     if (resultStatus.ok === false) {
       return createError({
-        log,
+        log: logArchive,
         ...resultStatus.error,
       });
     }
     refreshPending(); // refresh pending list after archive (not awaited)
+    if (resultStatus.data.state === "ok") {
+      logArchive.info("Page archived", {
+        tabId,
+        url: page.url,
+        versions: resultStatus.data.count,
+      });
+    }
     return createOk({ status: resultStatus.data, response, warnings });
   } catch (e) {
-    log.error("Archive request failed", e);
+    logArchive.error("Archive request failed", e);
     return createError({
-      log,
+      log: logArchive,
       message: "Archive request failed",
       extra: e,
     });
   } finally {
     busyTabs.delete(tabId);
+    measure();
   }
 }
 
@@ -513,14 +578,14 @@ async function archiveWithFeedback(
     const result = await archiveTab(tabId);
     if (result.ok === false) {
       return createError({
-        log,
+        log: logArchive,
         ...result.error,
       });
     }
 
     if (result.data.status?.state !== "ok") {
       return createError({
-        log,
+        log: logArchive,
         message: result.data.status?.state ?? "status not ok",
         extra: result.data,
       });
@@ -537,6 +602,7 @@ async function archiveWithFeedback(
     return createOk(result.data);
   } catch (e) {
     const errorMessage = isStandardError(e) ? e.message : String(e);
+    logArchive.error("Archive failed", errorMessage, e);
 
     await session_storage_set("archiveError:" + tabId, {
       message: errorMessage,
@@ -557,7 +623,7 @@ async function archiveWithFeedback(
       });
 
     return createError({
-      log,
+      log: logArchive,
       message: errorMessage,
       extra: e,
     });
@@ -567,6 +633,7 @@ async function archiveWithFeedback(
 /* ================= direct archive from pending list ================= */
 async function openAndArchive(url: Url) {
   const tab = await browser.tabs.create({ url, active: true });
+  logCapture.info("Opened new tab for direct archive", { url, tabId: tab.id });
   await session_storage_set("open:" + tab.id, { url, at: Date.now() });
 }
 async function handleOpened(tabId: Int) {
@@ -576,8 +643,10 @@ async function handleOpened(tabId: Int) {
   try {
     await browser.tabs.get(tabId);
   } catch {
+    logCapture.debug("Direct-archive tab closed before archiving", { tabId });
     return;
   }
+  logCapture.debug(`Direct-archive mode: ${s.directArchiveMode}`, { tabId });
   if (s.directArchiveMode === "auto") archiveWithFeedback(tabId, { toast: true });
   else injectBanner(tabId, { kind: "", mode: "prompt", text: "Archive this page?" });
 }
@@ -625,6 +694,7 @@ async function ensureAlarm(force: boolean = false) {
 browser.tabs.onUpdated.addListener(async (tabId, change, tab) => {
   const loaded = change.status === "complete" || (change.url && tab.status === "complete");
   if (!loaded || !isArchivable(tab.url)) return;
+  logWebReq.debug("Page load complete", { tabId, url: tab.url });
   if (change.status === "complete" && (await session_storage_get("open:" + tabId)))
     handleOpened(tabId);
   const extentionSettings = await getExtentionSettings();
@@ -635,10 +705,14 @@ browser.tabs.onActivated.addListener(async ({ tabId }) => {
   const st = await session_storage_get("status:" + tabId);
   if (st) return;
   const extentionSettings = await getExtentionSettings();
-  if (extentionSettings.autoCheck) checkArchiveVersion(tabId);
+  if (extentionSettings.autoCheck) {
+    logCheck.debug("Tab activated with no cached status, re-checking", { tabId });
+    checkArchiveVersion(tabId);
+  }
 });
 
 browser.tabs.onRemoved.addListener((tabId) => {
+  logWebReq.debug("Tab removed", { tabId });
   headerMemory.delete(tabId);
   session_storage_delete(
     "hdr:" + tabId,
@@ -651,28 +725,39 @@ browser.tabs.onRemoved.addListener((tabId) => {
 browser.commands.onCommand.addListener(async (cmd) => {
   if (cmd !== "archive-page") return;
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  if (tab) archiveWithFeedback(tab.id as number, { toast: true });
+  if (tab) {
+    log.info("Keyboard shortcut received", { command: cmd, tabId: tab.id });
+    archiveWithFeedback(tab.id as number, { toast: true });
+  }
 });
 
 browser.alarms.onAlarm.addListener((a) => {
-  if (a.name === ALARM) refreshPending();
+  if (a.name === ALARM) {
+    logPending.debug("Periodic refresh alarm fired");
+    refreshPending();
+  }
 });
 
 browser.runtime.onInstalled.addListener(async (d) => {
+  log.info("Extension installed/updated", d.reason);
   await ensureAlarm(true);
   refreshPending();
   const extentionSettings = await getExtentionSettings();
-  if (d.reason === "install" && extentionSettings.serverUrl === "")
+  if (d.reason === "install" && extentionSettings.serverUrl === "") {
+    log.info("First install, opening options page to configure the server");
     browser.runtime.openOptionsPage();
+  }
 });
 
 browser.runtime.onStartup.addListener(() => {
+  log.debug("Browser startup");
   ensureAlarm();
   refreshPending();
 });
 
 browser.storage.onChanged.addListener(async (changes, area) => {
   if (area !== "local" || !changes.settings) return;
+  log.debug("Settings changed, refreshing pending list and status", Object.keys(changes));
   await ensureAlarm(true);
   await refreshPending();
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
@@ -682,6 +767,7 @@ browser.storage.onChanged.addListener(async (changes, area) => {
 browser.webRequest.onSendHeaders.addListener(
   (tab) => {
     if (tab.tabId < 0) return;
+    logWebReq.debug("→ onSendHeaders", { tabId: tab.tabId, url: tab.url, method: tab.method });
     patchHeaders(tab.tabId, tab.requestId, {
       tabId: tab.tabId,
       requestId: tab.requestId,
@@ -701,6 +787,11 @@ browser.webRequest.onSendHeaders.addListener(
 browser.webRequest.onHeadersReceived.addListener(
   (tab) => {
     if (tab.tabId < 0) return;
+    logWebReq.debug("← onHeadersReceived", {
+      tabId: tab.tabId,
+      url: tab.url,
+      statusCode: tab.statusCode,
+    });
     patchHeaders(tab.tabId, tab.requestId, {
       requestId: tab.requestId,
       tabId: tab.tabId,
@@ -729,9 +820,9 @@ type Handlers = {
 /** Requires a handler for every message type (compile error if one is missing). */
 export function registerHandlers(handlers: Handlers): void {
   browser.runtime.onMessage.addListener((raw: unknown, sender: browser.Runtime.MessageSender) => {
-    log.debug("On message", raw);
+    if (!isMessage(raw, handlers)) return undefined; // not ours (includes forwarded log entries)
 
-    if (!isMessage(raw, handlers)) return undefined; // not ours
+    logMsg.debug("→ On message", raw.type, raw.payload, { senderTabId: sender?.tab?.id ?? null });
 
     const handler = handlers[raw.type] as (
       payload: unknown,
@@ -742,7 +833,7 @@ export function registerHandlers(handlers: Handlers): void {
       try {
         return { success: true, data: await handler(raw.payload, sender) };
       } catch (err) {
-        log.error(`message:${raw.type} handler failed`, err);
+        logMsg.error(`message:${raw.type} handler failed`, err);
         return {
           success: false,
           error: err instanceof Error ? err.message : String(err),
@@ -773,6 +864,7 @@ registerHandlers({
       ok: true,
       configured: {
         server: endpoint.server !== "",
+        archive: endpoint.archive !== "",
         pending: endpoint.pending !== "",
         check: endpoint.check !== "",
       },

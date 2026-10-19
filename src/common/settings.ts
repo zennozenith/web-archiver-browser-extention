@@ -4,8 +4,10 @@ export function getEndpoint({
   checkUrl,
   pendingUrl,
   serverUrl,
+  archiveUrl,
 }: {
   checkUrl: OverrideUrl;
+  archiveUrl: OverrideUrl;
   pendingUrl: OverrideUrl;
   serverUrl: Url;
 }): Endpoint {
@@ -14,16 +16,19 @@ export function getEndpoint({
   const derivedUrls =
     baseUrl !== ""
       ? {
+          archive: `${baseUrl}/api/archive`,
           pending: `${baseUrl}/api/pending`,
           check: `${baseUrl}/api/check`,
         }
       : {
+          archive: "",
           pending: "",
           check: "",
         };
 
   return {
     server: baseUrl,
+    archive: archiveUrl.override ? archiveUrl.url : derivedUrls.archive,
     pending: pendingUrl.override ? pendingUrl.url : derivedUrls.pending,
     check: checkUrl.override ? checkUrl.url : derivedUrls.check,
   };

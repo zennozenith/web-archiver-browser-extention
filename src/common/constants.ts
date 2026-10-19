@@ -1,8 +1,10 @@
 import { ExtensionSettings } from "./types.ts";
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
+  logLevel: "info",
   apiToken: "",
   autoCheck: true,
+  archiveUrl: { override: false, url: "" },
   checkUrl: { override: false, url: "" },
   directArchiveDelaySec: 2,
   directArchiveMode: "prompt", // prompt | auto

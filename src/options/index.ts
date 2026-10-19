@@ -6,11 +6,14 @@ import {
   ExtensionSettings,
   getEndpoint,
   getExtentionSettings,
+  log as rootLog,
   Result,
   saveSettings,
   setElementText,
 } from "@common/index";
 import { createError, createOk } from "@common/error";
+
+const log = rootLog.child("options");
 
 // DOM Elements
 const form = document.getElementById("options-form") as HTMLFormElement;
@@ -21,6 +24,7 @@ const toast = document.getElementById("toast") as HTMLDivElement;
 
 const inputServerUrl = document.querySelector("[data-key=server-url") as HTMLInputElement;
 const inputApiToken = document.querySelector("[data-key=api-token") as HTMLInputElement;
+const inputArchiverUrl = document.querySelector("[data-key=archive-url") as HTMLInputElement;
 const inputPendingUrl = document.querySelector("[data-key=pending-url") as HTMLInputElement;
 const inputCheckUrl = document.querySelector("[data-key=check-url") as HTMLInputElement;
 const inputIncludeScreenshot = document.querySelector(
@@ -58,6 +62,7 @@ const inputDirectArchiveDelaySec = document.querySelector(
 ) as HTMLInputElement;
 const selectTheme = document.querySelector("[data-key=select-theme") as HTMLSelectElement;
 const inputShowBadge = document.querySelector("[data-key=show-badge") as HTMLInputElement;
+const selectLogLevel = document.querySelector("[data-key=select-log-level") as HTMLSelectElement;
 
 let toastTimeout: ReturnType<typeof setTimeout> | null = null;
 
@@ -94,8 +99,10 @@ function showToast(message: string, type: "success" | "error" = "success"): void
 async function loadSettings(): Promise<void> {
   try {
     const settings = await getExtentionSettings();
+    log.debug("Settings loaded", Object.keys(settings));
     fillForm(settings);
   } catch (err) {
+    log.error("Failed to load settings", err);
     showToast(`Failed to load settings: ${err}`, "error");
   }
 }
@@ -107,6 +114,7 @@ function readForm(): ExtensionSettings {
   return {
     serverUrl: inputServerUrl.value,
     apiToken: inputApiToken.value,
+    archiveUrl: { override: inputArchiverUrl.value !== "", url: inputArchiverUrl.value },
     pendingUrl: { override: inputPendingUrl.value !== "", url: inputPendingUrl.value },
     checkUrl: { override: inputCheckUrl.value !== "", url: inputCheckUrl.value },
     includeScreenshot: inputIncludeScreenshot.checked,
@@ -124,6 +132,7 @@ function readForm(): ExtensionSettings {
     directArchiveDelaySec: Number(inputDirectArchiveDelaySec.value),
     theme: selectTheme.value as ExtensionSettings["theme"],
     showBadge: inputShowBadge.checked,
+    logLevel: selectLogLevel.value as ExtensionSettings["logLevel"],
   };
 }
 
@@ -148,8 +157,16 @@ function fillForm(extentionSettings: ExtensionSettings): void {
   inputDirectArchiveDelaySec.value = String(extentionSettings.directArchiveDelaySec);
   selectTheme.value = extentionSettings.theme;
   inputShowBadge.checked = extentionSettings.showBadge;
+  selectLogLevel.value = extentionSettings.logLevel;
 
   const endpoint = getEndpoint(extentionSettings);
+
+  if (extentionSettings.archiveUrl.override) {
+    inputArchiverUrl.value = endpoint.archive;
+  } else {
+    inputArchiverUrl.placeholder = endpoint.archive;
+  }
+
   if (extentionSettings.pendingUrl.override) {
     inputPendingUrl.value = endpoint.pending;
   } else {
@@ -169,11 +186,12 @@ function fillForm(extentionSettings: ExtensionSettings): void {
  * Preview derived urls
  */
 function previewUrls(): void {
-  const { checkUrl, serverUrl, pendingUrl } = readForm();
-  let endpoint = getEndpoint({ checkUrl, serverUrl, pendingUrl });
+  const { checkUrl, serverUrl, pendingUrl, archiveUrl } = readForm();
+  let endpoint = getEndpoint({ checkUrl, serverUrl, pendingUrl, archiveUrl });
 
   if (serverUrl === "") {
     const placeholderEndpoints = getEndpoint({
+      archiveUrl,
       checkUrl,
       pendingUrl,
       serverUrl: inputServerUrl.placeholder,
@@ -182,16 +200,22 @@ function previewUrls(): void {
     endpoint = placeholderEndpoints;
   }
 
+  inputArchiverUrl.placeholder = endpoint.archive;
   inputPendingUrl.placeholder = endpoint.pending;
   inputCheckUrl.placeholder = endpoint.check;
 
   const tr1 = getElementById("effective1", HTMLTableRowElement);
-  tr1.children[0].textContent = "pending";
-  tr1.children[1].textContent = endpoint.pending;
-  tr1.children[2].textContent = pendingUrl.override ? "override" : "derived";
+  tr1.children[0].textContent = "archive";
+  tr1.children[1].textContent = endpoint.archive;
+  tr1.children[2].textContent = archiveUrl.override ? "override" : "derived";
 
   const tr2 = getElementById("effective2", HTMLTableRowElement);
-  tr2.children[0].textContent = "check";
+  tr2.children[0].textContent = "pending";
+  tr2.children[1].textContent = endpoint.pending;
+  tr2.children[2].textContent = pendingUrl.override ? "override" : "derived";
+
+  const tr3 = getElementById("effective3", HTMLTableRowElement);
+  tr3.children[0].textContent = "check";
   tr2.children[1].textContent = endpoint.check;
   tr2.children[2].textContent = checkUrl.override ? "override" : "derived";
 }
@@ -246,9 +270,11 @@ form.addEventListener("submit", async (e) => {
       return;
     }
 
+    log.setLevel(updatedSettings.logLevel);
     const saved = await saveSettings(updatedSettings);
     fillForm(saved);
 
+    log.info("Preferences saved", { keys: Object.keys(updatedSettings) });
     setElementText(
       getElementById("save-result", HTMLSpanElement),
       "✓ Preferences saved successfully!",
@@ -258,6 +284,7 @@ form.addEventListener("submit", async (e) => {
 
     showToast("✓ Preferences saved successfully!", "success");
   } catch (err) {
+    log.error("Failed to save settings", err);
     showToast(`Error saving settings: ${err}`, "error");
   } finally {
     btnSave.disabled = false;
@@ -330,8 +357,10 @@ btnReset.addEventListener("click", async () => {
   try {
     const saved = await saveSettings(DEFAULT_SETTINGS);
     fillForm(saved);
+    log.info("Preferences reset to defaults");
     showToast("Preferences reset to default values", "success");
   } catch (err) {
+    log.error("Failed to reset settings", err);
     showToast(`Error resetting settings: ${err}`, "error");
   } finally {
     btnReset.disabled = false;
@@ -344,11 +373,13 @@ selectTheme.addEventListener("change", () => {
 });
 
 inputServerUrl.addEventListener("input", previewUrls);
+inputArchiverUrl.addEventListener("input", previewUrls);
 inputPendingUrl.addEventListener("input", previewUrls);
 inputCheckUrl.addEventListener("input", previewUrls);
 
 // Initialize on page load
 document.addEventListener("DOMContentLoaded", async () => {
+  log.debug("Options page opened");
   await loadSettings();
   previewUrls();
 

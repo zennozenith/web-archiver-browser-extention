@@ -1,8 +1,11 @@
 import { WebRequest } from "webextension-polyfill";
 import { ApiArchiveVersionsResponse, PendingResponseInStorage } from "./reqwest";
+import { LevelSetting } from "./logger";
 
 export type Int = number;
+export type ISODateTime = string;
 export type Url = string;
+export type Uuid = string;
 
 export interface OverrideUrl {
   override: boolean;
@@ -31,6 +34,7 @@ export type Result<T, E = unknown> = Ok<T> | Err<E>;
 
 export interface Endpoint {
   server: Url;
+  archive: Url;
   pending: Url;
   check: Url;
 }
@@ -56,8 +60,10 @@ export interface ReqeustOptions {
 }
 
 export interface ExtensionSettings {
+  logLevel: LevelSetting;
   apiToken: string;
   autoCheck: boolean;
+  archiveUrl: OverrideUrl;
   checkUrl: OverrideUrl;
   directArchiveDelaySec: Int;
   directArchiveMode: "prompt" | "auto";
@@ -129,14 +135,6 @@ export interface OkStatus extends ApiArchiveVersionsResponse {
   state: "ok";
   url: Url;
   checkedAt: number;
-  archived: boolean;
-  count: number;
-  versions: {
-    id: string;
-    time: number;
-    url: Url;
-  }[];
-  last?: number;
 }
 
 export type Status = UnsupportedStatus | UnconfiguredStatus | ErrorStatus | OkStatus;
@@ -145,6 +143,7 @@ export interface State {
   ok: true;
   configured: {
     server: boolean;
+    archive: boolean;
     pending: boolean;
     check: boolean;
   };
@@ -153,12 +152,3 @@ export interface State {
   pending: PendingResponseInStorage;
   pendingLimit: number;
 }
-// export interface Status {
-//   state: "unsupported" | "unconfigured" | "error";
-//   archived: boolean;
-//   url: Url;
-//   count: Int;
-//   versions: any[];
-//   last: unknown;
-//   error?: string;
-// }

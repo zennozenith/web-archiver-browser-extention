@@ -1,5 +1,8 @@
 import { createError, isNamedError, isStandardError } from "./error";
-import type { ReqeustOptions, Result, Url } from "./types";
+import { log as rootLog } from "./log.ts";
+import type { ISODateTime, ReqeustOptions, Result, Url, Uuid } from "./types";
+
+const log = rootLog.child("http");
 
 export interface ApiErrorDetail {
   field?: string;
@@ -34,15 +37,24 @@ export interface ApiErrorResponse {
   };
 }
 
-/** {
-  "success": true,
-  "message": "Resource deleted successfully.",
-  "timestamp": "2026-10-18T09:50:00Z"
-} */
-export interface ApiSuccessResponse {
+// /** {
+//   "success": true,
+//   "message": "Resource deleted successfully.",
+//   "timestamp": "2026-10-18T09:50:00Z"
+// } */
+// export interface ApiSuccessResponse {
+//   success: true;
+//   message?: string;
+//   timestamp?: string;
+// }
+//
+export interface ApiSuccessArchiveResponse {
   success: true;
-  message?: string;
-  timestamp?: string;
+  message: string;
+  id: Uuid;
+  url: Url;
+  archivedAt: ISODateTime;
+  versionCount: number;
 }
 
 // pending:"{"items":[
@@ -60,7 +72,7 @@ export interface ApiCheckPendingResponse {
     id: string;
     url: Url;
     title: string;
-    addedAt: number;
+    addedAt: ISODateTime;
   }[];
   total: number;
 }
@@ -74,10 +86,13 @@ export interface ApiArchiveVersionsResponse {
   count: number;
   versions: {
     id: string;
-    time: number;
+    archivedAt: ISODateTime;
     url: Url;
+    title: string;
+    htmlSize: number;
+    hasScreenshot: boolean;
   }[];
-  last?: number;
+  lastArchivedAt?: ISODateTime;
 }
 
 /* ---------- HTTP ---------- */
@@ -103,6 +118,11 @@ export async function request<T>(
   if (token) headers.Authorization = `Bearer ${token}`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  const done = log.time(`${method} ${url}`);
+  log.debug(`${method} ${url} →`, {
+    timeoutMs,
+    body: body instanceof FormData ? "FormData" : body,
+  });
   let res, text;
   try {
     res = await fetch(url, {
@@ -126,6 +146,7 @@ export async function request<T>(
   } finally {
     clearTimeout(timer);
   }
+  done(res.status);
 
   let data: T | null = null;
   try {

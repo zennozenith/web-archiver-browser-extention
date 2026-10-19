@@ -1,7 +1,11 @@
 import browser from "webextension-polyfill";
 import { DEFAULT_SETTINGS, STORAGE_KEYS } from "./constants.ts";
-import { ExtensionSettings } from "./types.ts";
-import { log } from "./index.ts";
+import type { ExtensionSettings } from "./types.ts";
+import { log as rootLog } from "./log.ts";
+
+const log = rootLog.child("storage");
+const logSettings = log.child("settings");
+const logSession = log.child("session");
 
 /* ---------- session storage with in-memory fallback ---------- */
 const _mem = new Map<string, unknown>();
@@ -28,23 +32,23 @@ export async function saveSettings(
   const current = await getExtentionSettings();
   const updated: ExtensionSettings = { ...current, ...settings };
   await browser.storage.sync.set({ [STORAGE_KEYS.SETTINGS]: updated });
+  logSettings.info("Settings saved", Object.keys(settings));
   return updated;
 }
 
 export async function session_storage_get<T>(key: string) {
-  // log.debug(`Get session key: ${key}`);
   if (browser.storage.session) return (await browser.storage.session.get(key))[key] as T;
   return _mem.get(key) as T;
 }
 
 export async function session_storage_set(key: string, val: unknown) {
-  log.debug(`Setting session key: ${key}`);
+  logSession.debug(`Setting session key: ${key}`);
   if (browser.storage.session) await browser.storage.session.set({ [key]: val });
   else _mem.set(key, val);
 }
 
 export async function session_storage_delete(...keys: string[]) {
-  log.debug(`Deleting session key: ${keys}`);
+  logSession.debug("Deleting session keys", keys);
   if (browser.storage.session) await browser.storage.session.remove(keys);
   else keys.forEach((k) => _mem.delete(k));
 }
