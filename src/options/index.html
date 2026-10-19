@@ -1,160 +1,184 @@
-<!DOCTYPE html>
+<!doctype html>
 
 <html>
-	<head>
-		<meta charset="utf-8">
-		<title>Web Archiver — Preferences</title>
-		<meta name="viewport" content="width=device-width, initial-scale=1.0">
-		<link rel="stylesheet" href="./options.css">
-	</head>
+  <head>
+    <meta charset="utf-8" />
+    <title>Web Archiver — Preferences</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="./options.css" />
+  </head>
 
-	<body>
-		<div class="wrap">
-			<header class="header">
-				<img src="/icons/icon-48.png" alt="Extension Logo" class="header-icon">
-				<div class="header-title">
-					<h1>Web Archiver — Preferences</h1>
-					<p>Configure extension settings synced across your devices</p>
-				</div>
-			</header>
+  <body>
+    <div class="wrap">
+      <header class="header">
+        <img src="/icons/icon-48.png" alt="Extension Logo" class="header-icon" />
+        <div class="header-title">
+          <h1>Web Archiver — Preferences</h1>
+          <p>Configure extension settings synced across your devices</p>
+        </div>
+      </header>
 
-			<div id="toast" class="toast"></div>
+      <div id="toast" class="toast"></div>
 
-			<div id="perm" class="notice" hidden>
-				Site access isn't granted yet (needed to read pages and request headers).
-				<button id="btn-perm">Grant site access</button>
-			</div>
+      <div id="perm" class="notice" hidden>
+        Site access isn't granted yet (needed to read pages and request headers).
+        <button id="btn-perm">Grant site access</button>
+      </div>
 
-			<form id="options-form">
-				<fieldset>
-					<legend>Server</legend>
-					<label>Archive server URL
-						<input data-key="server-url" type="url" placeholder="https://archive.example.com/"></label>
-					<label>API token
-						<span class="hint">(optional, sent as <code>Authorization: Bearer …</code>)</span>
-						<input data-key="api-token" type="password" autocomplete="off"></label>
-				</fieldset>
+      <form id="options-form">
+        <fieldset>
+          <legend>Server</legend>
+          <label
+            >Archive server URL
+            <input data-key="server-url" type="url" placeholder="https://archive.example.com/"
+          /></label>
+          <label
+            >API token
+            <span class="hint">(optional, sent as <code>Authorization: Bearer …</code>)</span>
+            <input data-key="api-token" type="password" autocomplete="off"
+          /></label>
+        </fieldset>
 
-				<fieldset>
-					<legend>Endpoints</legend>
-					<p class="hint">
-						Derived from the server URL by default. Fill a field only to override. For the check
-						endpoint, <code>{url}</code>
-						may be used as a placeholder; otherwise <code>?url=</code>
-						is
-						appended.
-					</p>
-					<label>Pending endpoint (GET) <input data-key="pending-url" type="url"></label>
-					<label>Check endpoint (GET) <input data-key="check-url" type="text"></label>
-					<table>
-						<thead>
-							<tr>
-								<th>Effective</th>
-								<th>URL</th>
-								<th>Source</th>
-							</tr>
-						</thead>
+        <fieldset>
+          <legend>Endpoints</legend>
+          <p class="hint">
+            Derived from the server URL by default. Fill a field only to override. For the check
+            endpoint, <code>{url}</code> may be used as a placeholder; otherwise <code>?url=</code>
+            is appended.
+          </p>
+          <label>Pending endpoint (GET) <input data-key="pending-url" type="url" /></label>
+          <label>Check endpoint (GET) <input data-key="check-url" type="text" /></label>
+          <table>
+            <thead>
+              <tr>
+                <th>Effective</th>
+                <th>URL</th>
+                <th>Source</th>
+              </tr>
+            </thead>
 
-						<tbody>
-							<tr id="effective1">
-								<td>pending</td>
-								<td>https://archive.example.com/api/pending</td>
-								<td>derived</td>
-							</tr>
-							<tr id="effective2">
-								<td>check</td>
-								<td>https://archive.example.com/api/check</td>
-								<td>derived</td>
-							</tr>
-						</tbody>
-					</table>
-					<div class="actions">
-						<button id="btn-test" type="button">Test connection</button><span id="test-result"></span>
-					</div>
-				</fieldset>
+            <tbody>
+              <tr id="effective1">
+                <td>pending</td>
+                <td>https://archive.example.com/api/pending</td>
+                <td>derived</td>
+              </tr>
+              <tr id="effective2">
+                <td>check</td>
+                <td>https://archive.example.com/api/check</td>
+                <td>derived</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="actions">
+            <button id="btn-test" type="button">Test connection</button
+            ><span id="test-result"></span>
+          </div>
+        </fieldset>
 
-				<fieldset>
-					<legend>Capture</legend>
-					<label class="chk"><input data-key="include-screenshot" type="checkbox" checked>
-					Include screenshot</label>
-					<label>
-						Screenshot format
-						<select data-key="screenshot-format">
-							<option value="png">PNG</option>
-							<option value="jpeg">JPEG (smaller)</option>
-						</select>
-					</label>
-					<label>JPEG quality (1–100) <input data-key="jpeg-quality" type="number" min="1" max="100"></label>
-					<label class="chk"><input data-key="full-page-screenshot" type="checkbox">
-					Full-page screenshot
-					<span class="hint">(Firefox only); Chrome captures the visible area)</span></label>
-					<label class="chk"><input data-key="include-request-headers" type="checkbox">
-					Include request headers</label>
-					<label class="chk"><input data-key="include-response-headers" type="checkbox">
-					Include response
-					headers</label>
-					<label class="chk"><input data-key="include-sensitive-headers" type="checkbox">
-					Include sensitive headers
-					unredacted <span class="hint">(Cookie, Authorization, Set-Cookie)</span></label>
-					<label>Upload timeout (seconds)
-						<input data-key="request-timeout-sec" type="number" min="10" max="1800"></label>
-				</fieldset>
+        <fieldset>
+          <legend>Capture</legend>
+          <label class="chk"
+            ><input data-key="include-screenshot" type="checkbox" checked /> Include
+            screenshot</label
+          >
+          <label>
+            Screenshot format
+            <select data-key="screenshot-format">
+              <option value="png">PNG</option>
+              <option value="jpeg">JPEG (smaller)</option>
+            </select>
+          </label>
+          <label
+            >JPEG quality (1–100) <input data-key="jpeg-quality" type="number" min="1" max="100"
+          /></label>
+          <label class="chk"
+            ><input data-key="full-page-screenshot" type="checkbox" />
+            Full-page screenshot
+            <span class="hint">(Firefox only); Chrome captures the visible area)</span></label
+          >
+          <label class="chk"
+            ><input data-key="include-request-headers" type="checkbox" /> Include request
+            headers</label
+          >
+          <label class="chk"
+            ><input data-key="include-response-headers" type="checkbox" /> Include response
+            headers</label
+          >
+          <label class="chk"
+            ><input data-key="include-sensitive-headers" type="checkbox" /> Include sensitive
+            headers unredacted <span class="hint">(Cookie, Authorization, Set-Cookie)</span></label
+          >
+          <label
+            >Upload timeout (seconds)
+            <input data-key="request-timeout-sec" type="number" min="10" max="1800"
+          /></label>
+        </fieldset>
 
-				<fieldset>
-					<legend>Toolbar &amp; pending list</legend>
-					<label class="chk"><input data-key="auto-check" type="checkbox">
-					Check archive status automatically when a
-					page loads</label>
-					<label>Refresh pending list every (minutes, 0 = never)
-						<input data-key="pending-refresh-minutes" type="number" min="0" max="1440"></label>
-					<label>Max pending items to keep
-						<input data-key="pending-limit" type="number" min="10" max="5000"></label>
-					<label>After “Archive” on a pending item opens a page
-						<select data-key="direct-archive-mode">
-							<option value="prompt">Ask me on the page</option>
-							<option value="auto">Archive automatically</option>
-						</select></label>
-					<label>Wait after page load before prompting/archiving (seconds)
-						<input data-key="direct-archive-delay-sec" type="number" min="0" max="60"></label>
-				</fieldset>
+        <fieldset>
+          <legend>Toolbar &amp; pending list</legend>
+          <label class="chk"
+            ><input data-key="auto-check" type="checkbox" /> Check archive status automatically when
+            a page loads</label
+          >
+          <label
+            >Refresh pending list every (minutes, 0 = never)
+            <input data-key="pending-refresh-minutes" type="number" min="0" max="1440"
+          /></label>
+          <label
+            >Max pending items to keep
+            <input data-key="pending-limit" type="number" min="10" max="5000"
+          /></label>
+          <label
+            >After “Archive” on a pending item opens a page
+            <select data-key="direct-archive-mode">
+              <option value="prompt">Ask me on the page</option>
+              <option value="auto">Archive automatically</option>
+            </select></label
+          >
+          <label
+            >Wait after page load before prompting/archiving (seconds)
+            <input data-key="direct-archive-delay-sec" type="number" min="0" max="60"
+          /></label>
+        </fieldset>
 
-				<fieldset>
-					<legend>Keyboard shortcut</legend>
-					<p>
-						Archive current page: <strong id="shortcut">…</strong>
-						<button id="btn-shortcut" type="button">Change shortcut</button>
-					</p>
-					<p id="shortcut-help" class="hint" hidden></p>
-				</fieldset>
+        <fieldset>
+          <legend>Keyboard shortcut</legend>
+          <p>
+            Archive current page: <strong id="shortcut">…</strong>
+            <button id="btn-shortcut" type="button">Change shortcut</button>
+          </p>
+          <p id="shortcut-help" class="hint" hidden></p>
+        </fieldset>
 
-				<fieldset>
-					<legend>Miscellaneous</legend>
+        <fieldset>
+          <legend>Miscellaneous</legend>
 
-					<label>
-						Theme Mode
-						<select id="select-theme" data-key="select-theme">
-							<option value="auto">System Default (Auto)</option>
-							<option value="light">Light</option>
-							<option value="dark">Dark</option>
-						</select>
-					</label>
+          <label>
+            Theme Mode
+            <select id="select-theme" data-key="select-theme">
+              <option value="auto">System Default (Auto)</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </label>
 
-					<label class="chk" for="input-badge">
-						<input id="input-badge" data-key="show-badge" type="checkbox" checked>
-						<span>Show badge on extension icon</span>
-						<span class="hint">(Displays number of archive versions on the toolbar icon)</span>
-					</label>
-				</fieldset>
+          <label class="chk" for="input-badge">
+            <input id="input-badge" data-key="show-badge" type="checkbox" checked />
+            <span>Show badge on extension icon</span>
+            <span class="hint">(Displays number of archive versions on the toolbar icon)</span>
+          </label>
+        </fieldset>
 
-				<div class="form-actions">
-					<button type="button" id="btn-reset" class="secondary">Reset to Defaults</button>
-					<div>
-						<button type="submit" id="btn-save" class="primary">Save Changes</button>
-						<span id="save-result"></span>
-					</div>
-				</div>
-			</form>
-		</div>
-		<script type="module" src="./index.ts"></script>
-	</body>
+        <div class="form-actions">
+          <button type="button" id="btn-reset" class="secondary">Reset to Defaults</button>
+          <div>
+            <button type="submit" id="btn-save" class="primary">Save Changes</button>
+            <span id="save-result"></span>
+          </div>
+        </div>
+      </form>
+    </div>
+    <script type="module" src="./index.ts"></script>
+  </body>
 </html>
