@@ -1,31 +1,19 @@
-import { createError, isNamedError, isStandardError, Result } from "./error";
-import { log as rootLog } from "./log.ts";
-import type { ISODateTime, ReqeustOptions, Url, Uuid } from "./types";
+import { createError, isNamedError, isStandardError, Result } from "@common/error";
+import { log as rootLog } from "@common/log";
+import type { ReqeustOptions, Url } from "@common/types";
 
 const log = rootLog.child("http");
+
+export interface TestEndpointResponse {
+  ok: boolean;
+  text: string;
+}
 
 export interface ApiErrorDetail {
   field?: string;
   issue: string;
 }
 
-/**
- * {
- *   "error": {
- *     "code": "VALIDATION_ERROR",
- *     "message": "One or more validation checks failed for the submitted data.",
- *     "status": 400,
- *     "details": [
- *       {
- *         "field": "serverUrl",
- *         "issue": "Server Url is empty"
- *       }
- *     ],
- *     "timestamp": "2026-10-18T09:50:00Z",
- *     "path": "/api/archive"
- *   }
- * }
- */
 export interface ApiErrorResponse {
   error: {
     code: string;
@@ -37,65 +25,6 @@ export interface ApiErrorResponse {
   };
 }
 
-// /** {
-//   "success": true,
-//   "message": "Resource deleted successfully.",
-//   "timestamp": "2026-10-18T09:50:00Z"
-// } */
-// export interface ApiSuccessResponse {
-//   success: true;
-//   message?: string;
-//   timestamp?: string;
-// }
-//
-export interface ApiSuccessArchiveResponse {
-  success: true;
-  message: string;
-  id: Uuid;
-  url: Url;
-  archivedAt: ISODateTime;
-  versionCount: number;
-}
-
-// pending:"{"items":[
-//
-// {"url":"https://en.wikipedia.org/wiki/Web_archiving",
-// "title":"Web Archiving - Wikipedia",
-// "addedAt":"2026-10-16T13:27:27.003Z"},
-// {"url":"https://news.ycombinator.com",
-// "title":"Hacker News","addedAt":"2026-10-16T10:27:27.004Z"},
-// {"url":"https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions",
-// "title":"MDN WebExtensions Documentation","addedAt":"2026-10-15T15:27:27.004Z"}
-// ],"total":3,"fetchedAt":1792249602948,"error":null}"
-export interface ApiCheckPendingResponse {
-  items: {
-    id: string;
-    url: Url;
-    title: string;
-    addedAt: ISODateTime;
-  }[];
-  total: number;
-}
-export interface PendingResponseInStorage extends ApiCheckPendingResponse {
-  fetchedAt: number;
-  error: string;
-}
-
-export interface ApiArchiveVersionsResponse {
-  archived: boolean;
-  count: number;
-  versions: {
-    id: string;
-    archivedAt: ISODateTime;
-    url: Url;
-    title: string;
-    htmlSize: number;
-    hasScreenshot: boolean;
-  }[];
-  lastArchivedAt?: ISODateTime;
-}
-
-/* ---------- HTTP ---------- */
 export async function request<T>(
   url: Url,
   {

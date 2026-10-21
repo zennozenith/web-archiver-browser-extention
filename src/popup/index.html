@@ -10,11 +10,73 @@
   </head>
 
   <body>
-    <header>
+    <!-- <header>
       <h1>URL Archiver</h1>
-      <button id="btn-open-options-1" class="icon" title="Preferences" aria-label="Preferences">
+      <button data-key="btn-open-options" class="icon" title="Preferences" aria-label="Preferences">
         ⚙
       </button>
+    </header> -->
+
+    <header class="extension-header">
+      <h1 class="extension-title">URL Archiver</h1>
+
+      <div class="toolbar-actions">
+        <!-- Server Link Button -->
+        <a
+          data-key="anchor-open-server"
+          href="#"
+          class="icon-button"
+          title="Open Server Dashboard"
+          aria-label="Open Server Dashboard"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            class="lucide lucide-server"
+          >
+            <rect width="20" height="8" x="2" y="2" rx="2" ry="2" />
+            <rect width="20" height="8" x="2" y="14" rx="2" ry="2" />
+            <line x1="6" x2="6.01" y1="6" y2="6" />
+            <line x1="6" x2="6.01" y1="18" y2="18" />
+          </svg>
+        </a>
+
+        <!-- Preferences / Settings Button -->
+        <button
+          data-key="btn-open-options"
+          type="button"
+          class="icon-button"
+          title="Preferences"
+          aria-label="Preferences"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            class="lucide lucide-settings"
+          >
+            <path
+              d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"
+            />
+            <circle cx="12" cy="12" r="3" />
+          </svg>
+        </button>
+      </div>
     </header>
 
     <div id="spinner" class="spinner-card">
@@ -37,7 +99,7 @@
       <!-- Notice Section: No Server Configured -->
       <div id="notice-no-server" class="notice hidden">
         <div>No server configured yet.</div>
-        <button id="btn-open-options-2" type="button" class="sm">Open preferences</button>
+        <button data-key="btn-open-options" type="button" class="sm">Open preferences</button>
       </div>
 
       <!-- Error Box: Archive Endpoint Not Configured -->

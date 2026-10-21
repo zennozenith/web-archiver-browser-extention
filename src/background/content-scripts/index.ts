@@ -1,5 +1,35 @@
-import { Result } from "@common/error";
-import { BannerOpts, Page, ArchiveStatus } from "@common/types";
+import type { Result } from "@common/error";
+import { ArchiveStatus } from "../archive";
+
+export interface BannerOpts {
+  kind: "ok" | "err" | (string & {});
+  text: string;
+  mode: "prompt" | "toast" | (string & {});
+}
+
+export interface Page {
+  html: string;
+  url: string;
+  title: string;
+  referrer: string;
+  lang: string | null; //  eg: "en-US"
+  charset: string; //      eg: "UTF-8",
+  contentType: string; //  eg: "text/html",
+  lastModified: string; // eg: "09/04/2026 17:47:04"
+  canonical: string | null;
+
+  favicon: any;
+  meta: Record<string, string | null>;
+  viewport: {
+    width: number; //      eg: 1080
+    height: number; //     eg: 1902
+    dpr: number; //        eg: 1
+  };
+  scrollWidth: number; //  eg: 1902
+  scrollHeight: number; // eg: 23608
+  userAgent: string; //    eg: "Mozilla/5.0 (X11; Linux x86_64; rv:157.0) Gecko/20100101 Firefox/157.0",
+  language: string;
+}
 
 /**
  * runs inside the page

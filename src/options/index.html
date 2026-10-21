@@ -77,8 +77,8 @@
             </tbody>
           </table>
           <div class="actions">
-            <button id="btn-test" type="button">Test connection</button
-            ><span id="test-result"></span>
+            <button id="btn-test" type="button">Test connection</button>
+            <div id="test-result"></div>
           </div>
         </fieldset>
 
@@ -115,6 +115,10 @@
             ><input data-key="include-sensitive-headers" type="checkbox" /> Include sensitive
             headers unredacted <span class="hint">(Cookie, Authorization, Set-Cookie)</span></label
           >
+          <label
+            >Sensitive headers <input data-key="sensitive-headers" type="text" autocomplete="off"
+          /></label>
+
           <label
             >Upload timeout (seconds)
             <input data-key="request-timeout-sec" type="number" min="10" max="1800"

@@ -1,5 +1,5 @@
 import type { Logger } from "./logger.ts";
-import { log as genericLog } from "./log.ts";
+import { log as genericLogger } from "./log.ts";
 import { NonEmptyArray } from "./types.ts";
 
 export interface Ok<T> {
@@ -16,12 +16,12 @@ export interface Err {
 export type Result<T> = Ok<T> | Err;
 
 export function createError({
-  log = genericLog,
+  logger: log = genericLogger,
   error,
   message,
   extra: _extra,
 }: {
-  log?: Logger;
+  logger?: Logger;
   error?: Err;
   message: string;
   extra?: unknown;

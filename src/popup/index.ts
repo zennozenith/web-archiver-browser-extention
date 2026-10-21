@@ -1,11 +1,17 @@
-import { EventBus } from "@common/event-bus";
-import { formatTime, isArchivable, log as rootLog, sendToBackground, timeAgo } from "@common/index";
-import type { ArchiveOkStatus, ArchiveStatus, Configured, Url } from "@common/types";
 import browser from "webextension-polyfill";
 
+import { EventBus } from "@common/event-bus";
+import { formatTime, timeAgo } from "@common/time";
+import type { Url } from "@common/types";
+import { ArchiveOkStatus, ArchiveStatus } from "@src/background/archive";
+import { Configured } from "@common/settings";
+import { sendToBackground } from "@common/messaging";
+import { isArchivable } from "@common/index";
+import { log as rootLog } from "@common/log";
 const log = rootLog.child("popup");
 
 interface UiEvents {
+  "render:anchorServer": void;
   "render:notice": void;
   "render:currentPage": void;
   "render:archive": void;
@@ -22,6 +28,7 @@ interface AppEvents {
   loading: void;
   loaded: void;
   "configured:get": void;
+
   archive: void;
   "archive:check": void;
   "pending:check": void;
@@ -35,8 +42,8 @@ const appEl = document.getElementById("app") as HTMLElement;
 const spinnerEl = document.getElementById("spinner") as HTMLDivElement;
 const noticePermissionEl = document.getElementById("notice-permission") as HTMLDivElement;
 const btnGrantPermission = document.getElementById("btn-grant-permission") as HTMLButtonElement;
-const btnOpenOptions1 = document.getElementById("btn-open-options-1") as HTMLButtonElement;
-const btnOpenOptions2 = document.getElementById("btn-open-options-2") as HTMLButtonElement;
+const btnOpenOptions = document.querySelectorAll<HTMLButtonElement>("[data-key=btn-open-options");
+const serverOpen = document.querySelector("[data-key=anchor-open-server") as HTMLAnchorElement;
 const errorEndpointEl = document.getElementById("error-endpoint") as HTMLDivElement;
 const errorAnyEl = document.getElementById("error-any") as HTMLDivElement;
 const noticeNoServerEl = document.getElementById("notice-no-server") as HTMLDivElement;
@@ -121,6 +128,7 @@ appBus.once("configured:get", async () => {
     log.setLevel(configured.logLevel);
 
     uiBus.emit("error:any:clear");
+    uiBus.emit("render:anchorServer");
     uiBus.emit("render:notice");
     uiBus.emit("render:currentPage");
 
@@ -141,6 +149,7 @@ appBus.on("pending:check", async () => {
     log.error("Cannot get pending, ", pendingResult.messages.toString());
     uiBus.emit("error:any", { message: pendingResult.messages.toString() });
 
+    // TODO: move error render in seperate event
     currentStatusPill.className = "pill err";
     currentStatusPill.textContent = "Pending check failed";
 
@@ -318,6 +327,10 @@ uiBus.on("render:notice", () => {
   errorEndpointEl.classList.toggle("hidden", !isMissingServer);
 });
 
+uiBus.on("render:anchorServer", () => {
+  serverOpen.href = configured.endpoint.server;
+});
+
 uiBus.on("render:currentPage", () => {
   if (tab.url === undefined) {
     return;
@@ -326,7 +339,7 @@ uiBus.on("render:currentPage", () => {
   const archivable = tab && isArchivable(tab.url);
   currentUnarchivable.classList.toggle("hidden", archivable);
   currentMeta.classList.toggle("hidden", !archivable);
-  // btnArchive.disabled = archiving || !configured.server || !configured.archive || !archivable;
+  btnArchive.disabled = !archivable || !configured.server || !configured.archive;
 
   if (shortcut) {
     btnArchiveShortcut.textContent = `  (${shortcut})`;
@@ -479,13 +492,11 @@ btnGrantPermission.addEventListener("click", async () => {
 btnRecheck.addEventListener("click", async () => await appBus.emitAsync("archive:check"));
 btnRefreshPending.addEventListener("click", async () => await appBus.emitAsync("pending:refresh"));
 btnArchive.addEventListener("click", async () => await appBus.emitAsync("archive"));
-btnOpenOptions1.addEventListener("click", () => {
-  browser.runtime.openOptionsPage();
-  window.close();
-});
-btnOpenOptions2.addEventListener("click", () => {
-  browser.runtime.openOptionsPage();
-  window.close();
+btnOpenOptions.forEach((v) => {
+  v.addEventListener("click", () => {
+    browser.runtime.openOptionsPage();
+    window.close();
+  });
 });
 
 document.addEventListener("DOMContentLoaded", async () => {

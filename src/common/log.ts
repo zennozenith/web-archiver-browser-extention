@@ -33,3 +33,5 @@ export const bgLog = log.child("bg");
 export function receiveForwardedLogsInBackground(): () => void {
   return receiveForwardedLogs(bgLog);
 }
+
+export const bgRootlog = log.child("bg");

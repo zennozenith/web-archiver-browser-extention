@@ -202,8 +202,9 @@ async function handleArchive(req: Request): Promise<Response> {
         ? new TextEncoder().encode(v)
         : new Uint8Array(await v.arrayBuffer());
 
+  const screenshotFromat = await asText(pick(["screenshot-format"])); // "png" | "jpeg"; // jpeg's extension is jpg
   const html = await asBytes(pick(["html", "page.html"]));
-  const screenshot = await asBytes(pick(["screenshot", "screenshot.png"])); //todo: screenshot.jpg
+  const screenshot = await asBytes(pick(["screenshot", "screenshot.png", "screenshot.jpg"]));
   const metaText = await asText(pick(["metadata", "json", "metadata.json"]));
   let meta: Record<string, any> | null = null;
   try {
@@ -223,7 +224,16 @@ async function handleArchive(req: Request): Promise<Response> {
   mkdirSync(dir, { recursive: true });
 
   if (html) await Bun.write(join(dir, "page.html"), html);
-  if (screenshot) await Bun.write(join(dir, "screenshot.png"), screenshot);
+  if (screenshot) {
+    switch (screenshotFromat) {
+      case "png":
+        await Bun.write(join(dir, "screenshot.png"), screenshot);
+        break;
+      case "jpeg":
+        await Bun.write(join(dir, "screenshot.jpg"), screenshot);
+        break;
+    }
+  }
   if (meta) await Bun.write(join(dir, "metadata.json"), JSON.stringify(meta, null, 2));
 
   const id = crypto.randomUUID();

@@ -1,17 +1,16 @@
 import browser from "webextension-polyfill";
 
+import { createError, createOk, Result } from "@common/error";
+import { log as rootLog } from "@common/log";
 import {
-  getElementById,
   DEFAULT_SETTINGS,
   ExtensionSettings,
   getEndpoint,
   getExtentionSettings,
-  log as rootLog,
   saveSettings,
-  setElementText,
-} from "@common/index";
-import { createError, createOk, Result } from "@common/error";
-
+} from "@common/settings";
+import { getElementById, setElementText } from "@common/document";
+import { sendToBackground } from "@common/messaging";
 const log = rootLog.child("options");
 
 // DOM Elements
@@ -44,6 +43,9 @@ const inputIncludeResponseHeaders = document.querySelector(
 ) as HTMLInputElement;
 const inputIncludeSensitiveHeaders = document.querySelector(
   "[data-key=include-sensitive-headers",
+) as HTMLInputElement;
+const inputSensitiveHeaders = document.querySelector(
+  "[data-key=sensitive-headers",
 ) as HTMLInputElement;
 const inputRequestTimeoutSec = document.querySelector(
   "[data-key=request-timeout-sec",
@@ -110,6 +112,12 @@ async function loadSettings(): Promise<void> {
  * Read form
  */
 function readForm(): ExtensionSettings {
+  const sensitiveHeaders = new Set(
+    inputSensitiveHeaders.value
+      .split(",")
+      .map((v) => v.trim())
+      .filter((v) => v.length > 0),
+  );
   return {
     serverUrl: inputServerUrl.value,
     apiToken: inputApiToken.value,
@@ -132,6 +140,7 @@ function readForm(): ExtensionSettings {
     theme: selectTheme.value as ExtensionSettings["theme"],
     showBadge: inputShowBadge.checked,
     logLevel: selectLogLevel.value as ExtensionSettings["logLevel"],
+    sensitiveHeaders,
   };
 }
 
@@ -148,6 +157,7 @@ function fillForm(extentionSettings: ExtensionSettings): void {
   inputIncludeRequestHeaders.checked = extentionSettings.includeRequestHeaders;
   inputIncludeResponseHeaders.checked = extentionSettings.includeResponseHeaders;
   inputIncludeSensitiveHeaders.checked = extentionSettings.includeSensitiveHeaders;
+  inputSensitiveHeaders.value = Array.from(extentionSettings.sensitiveHeaders).join(", ");
   inputRequestTimeoutSec.value = String(extentionSettings.requestTimeoutSec);
   inputAutoCheck.checked = extentionSettings.autoCheck;
   inputPendingRefreshMinutes.value = String(extentionSettings.pendingRefreshMinutes);
@@ -296,62 +306,31 @@ form.addEventListener("submit", async (e) => {
 
 /**
  * Test Endpoints
- * TODO:
  */
 btnTest.addEventListener("click", async () => {
-  //  const settings = readForm(),
-  //    endpoints = deriveEndpoints(settings),
-  //    out = $("test-result", HTMLSpanElement);
-  //
-  //  const err = validateUrls(settings);
-  //
-  //  if (err) return msg(out, err, "err");
-  //  msg(out, "Testing…");
-  //
-  //  const lines = [];
-  //  let bad = false;
-  //  if (endpoints.pending) {
-  //    try {
-  //      const responseData = await request<Record<string, any[]>>(endpoints.pending, {
-  //        token: settings.apiToken,
-  //        timeoutMs: 15000,
-  //      });
-  //      if (typeof responseData === "string") {
-  //        throw new Error(`Responded with string instead of json object: ${responseData}`);
-  //      }
-  //      lines.push(`pending ✓ (${normalizePending(responseData).length} items)`);
-  //    } catch (e) {
-  //      bad = true;
-  //      lines.push("pending ✗ " + (e as { message: string }).message);
-  //    }
-  //  } else {
-  //    lines.push("pending: not configured");
-  //  }
-  //
-  //  if (endpoints.check) {
-  //    try {
-  //      const responseData = await request(buildCheckUrl(endpoints.check, "https://example.com/"), {
-  //        token: settings.apiToken,
-  //        timeoutMs: 15000,
-  //      });
-  //      lines.push(
-  //        `check ✓ (${typeof responseData === "object" ? "JSON ok" : "non-JSON response!"})`,
-  //      );
-  //    } catch (e) {
-  //      bad = true;
-  //      lines.push("check ✗ " + (e as { message: string }).message);
-  //    }
-  //  } else {
-  //    lines.push("check: not configured");
-  //  }
-  //
-  //  lines.push(
-  //    endpoints.archive
-  //      ? `archive: ${endpoints.archive} (not tested — POST creates data)`
-  //      : "archive: not configured",
-  //  );
-  //
-  //  msg(out, lines.join("\n"), bad ? "err" : "ok");
+  const settings = readForm(),
+    endpoints = getEndpoint(settings),
+    out = getElementById("test-result", HTMLDivElement);
+
+  const err = validateUrls(settings);
+
+  if (!err.ok) return setElementText(out, err.messages.toString(), "err");
+
+  setElementText(out, "Testing…");
+  const result = await sendToBackground("TEST_ENDPOINTS", { endpoints, token: settings.apiToken });
+  setElementText(out, "");
+
+  if (!result.ok) {
+    setElementText(out, result.messages.toString(), "err");
+    return;
+  }
+
+  result.data.forEach(({ ok, text }) => {
+    const div = document.createElement("div");
+    div.classList.add(ok ? "ok" : "err");
+    div.textContent = text;
+    out.appendChild(div);
+  });
 });
 
 // Reset to default settings
@@ -375,6 +354,10 @@ selectTheme.addEventListener("change", () => {
   applyTheme(selectTheme.value as "auto" | "light" | "dark");
 });
 
+inputIncludeSensitiveHeaders.addEventListener("change", (e) => {
+  const disabled = (e.target as HTMLInputElement).checked === true;
+  inputSensitiveHeaders.disabled = disabled;
+});
 inputServerUrl.addEventListener("input", previewUrls);
 inputArchiverUrl.addEventListener("input", previewUrls);
 inputPendingUrl.addEventListener("input", previewUrls);

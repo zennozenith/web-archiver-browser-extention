@@ -42,11 +42,12 @@ body {
     sans-serif;
 }
 
-header {
+header,
+.extension-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
+  padding: 12px 16px;
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
@@ -54,9 +55,57 @@ header {
   z-index: 1;
 }
 
-h1 {
+h1,
+.extension-title {
   font-size: 14px;
+  font-weight: 600;
   margin: 0;
+}
+
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Base Icon Button Styling (Dark Theme) */
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #a1a1aa; /* Muted gray for idle icons */
+  cursor: pointer;
+  text-decoration: none;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.icon-button:hover {
+  background-color: #27272a; /* Slightly lighter background on hover */
+  color: #f4f4f5; /* High contrast white icon on hover */
+}
+
+.icon-button:active {
+  background-color: #3f3f46;
+}
+
+.icon-button:focus-visible {
+  outline: 2px solid #3b82f6; /* Accent focus ring for accessibility */
+  outline-offset: 2px;
+}
+
+/* Locked SVG sizing & stroke specs */
+.icon-button svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 2;
 }
 
 h2 {

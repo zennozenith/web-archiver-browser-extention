@@ -1,8 +1,11 @@
 import browser from "webextension-polyfill";
-import type { ArchiveStatus, Configured, Int, Url } from "./types.ts";
+import type { Int, Url } from "./types.ts";
 import { log as rootLog } from "./log.ts";
 import { Result } from "./error.ts";
-import { ApiSuccessArchiveResponse, PendingResponseInStorage } from "./reqwest.ts";
+import { Configured, Endpoint } from "./settings.ts";
+import { ApiSuccessArchiveResponse, ArchiveStatus } from "@src/background/archive.ts";
+import { PendingResponseInStorage } from "@src/background/pending.ts";
+import { TestEndpointResponse } from "@src/background/reqwest.ts";
 
 const log = rootLog.child("messaging");
 
@@ -14,6 +17,10 @@ export type Empty = Record<string, never>;
  */
 export interface MessageMap {
   GET_CONFIGURED: { payload: undefined; data: Configured };
+  TEST_ENDPOINTS: {
+    payload: { endpoints: Endpoint; token?: string };
+    data: TestEndpointResponse[];
+  };
   GET_ARCHIVE: { payload: { tabId: Int }; data: ArchiveStatus };
   GET_PENDING: { payload: undefined; data: PendingResponseInStorage };
   ARCHIVE_TAB: {
