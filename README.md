@@ -1,262 +1,139 @@
-# Web Archiver (Chrome + Firefox, Manifest V3)
+# Web Archiver
 
-Build: `./build.py` → `dist/chrome`, `dist/firefox` and `dist/web-archiver-*.zip`.
-Only the manifest differs (Chrome: service worker; Firefox: event-page scripts).
-All code is shared in `src/`.
+A browser extension (Manifest V3) that archives web pages to **your own archive server**. For any given URL it can capture the HTML, a full-page screenshot, request/response headers, and page metadata — everything is sent to a server you control, so nothing depends on a third-party archive service.
 
-## Install
+Built with TypeScript, Vite+ (`vp`), and [`@crxjs/vite-plugin`](https://crxjs.dev). Chrome and Firefox are supported from a single codebase via a `TARGET` build flag.
 
-- **Chrome/Edge/Brave**:
-  `chrome://extensions` → Developer mode → _Load unpacked_ → `dist/chrome`.
-- **Firefox**:
-  `about:debugging#/runtime/this-firefox` → _Load Temporary Add-on_ → `dist/firefox/manifest.json`.
+## Features
 
-For permanent install, sign it as an unlisted add-on (`web-ext sign`) or use
-Developer/Nightly with signing disabled.
-Firefox MV3 doesn't auto-grant host permissions: use the "Grant access" button
-in the popup/preferences.
+- **Archive pages** — captures HTML, a screenshot, HTTP headers, and metadata, then sends it to your own server.
+  - Toolbar button, keyboard shortcut (`Alt+Shift+A`), or right from the page.
+- **Archive status-check** — checks whether the current page is already archived and shows existing versions in the popup badge/pill. Optionally runs automatically on page load (`autoCheck`).
+- **Tags** — add site-wide tags from the popup; tags are shared across all versions of a URL and merged server-side.
+- **Pending queue** — a periodic (configurable alarm-based) background refresh keeps a list of pending archives, and items can be re-tagged from the popup.
+- **Open and archive** — archive a URL without visiting it first.
+- **Badge feedback** — a small toast/notification with success/error feedback on archiving.
+- **Native-feeling integration** — respects the browser API differences between Chrome (Blink / service worker) and Firefox (Gecko / background scripts, `captureTab`).
 
-## Server Contract
+## Requirements
 
-Endpoints derive from the server URL (`https://archive.example.com/`):
+- [Bun](https://bun.sh) (runtime, package manager, and script runner)
+- [Vite+ CLI](https://viteplus.dev) (`vp`) — the unified build/lint/format/test toolchain
+- (Optional) [devenv](https://devenv.sh) for a hermetic dev shell — `devenv.nix` provides Bun, `librsvg`, `zip`, `oxfmt`, and defines helper scripts
 
-| purpose | method | derived URL                                                  |
-| ------- | ------ | ------------------------------------------------------------ |
-| archive | POST   | `/api/archive`                                               |
-| pending | GET    | `/api/pending`                                               |
-| check   | GET    | `/api/check?url=<page url>` (or override containing `{url}`) |
+Manual dependencies for `./build.sh`: `jq`, `zip`, `rsvg-convert` (from `librsvg`).
 
-Each can be overridden in Preferences. If an API token is set:
-`Authorization: Bearer <token>`.
+## Getting started
 
-### Post Archive — `multipart/form-data`
+```bash
+# install dependencies
+vp install        # or: bun install
 
-| part                    | filename                  | content-type               |
-| ----------------------- | ------------------------- | -------------------------- |
-| `metadata`              | `metadata.json`           | `application/json`         |
-| `html`                  | `page.html`               | `text/html;charset=utf-8`  |
-| `screenshot` (optional) | `screenshot.png` / `.jpg` | `image/png` / `image/jpeg` |
+# dev mode (Chrome)
+bun run dev:chrome
 
-`metadata` JSON: `url, title, capturedAt, page{referrer,lang,charset,contentType,canonical,favicon,meta{},viewport,scroll,userAgent,...}, request{method,url,headers{}}, response{statusCode,headers{}}, sensitiveHeadersRedacted, extension{}, files{html{size,sha256},screenshot{...}}, warnings[]`.
-Return 2xx (JSON optional). On error return non-2xx with `{"error": "..."}` — the message is shown in the toolbar popup.
+# dev mode (Firefox)
+bun run dev:firefox
 
-### GET check → any of these shapes work
-
-`{"archived":true,"count":3,"versions":[{"id":3,"archived_at":"2026-10-01T10:00:00Z","url":"https://…"}, …]}`
-(keys `versions|snapshots|archives|items`; time keys `archived_at|archivedAt|created_at|timestamp|time|date`; unix seconds or ms also OK).
-
-### GET pending → `["https://a", …]` or `{"urls":[…]}` / `{"items":[{"url","title","added_at"}]}`
-
-## 🚀 Quick Start with Mock Server
-
-To test the extensions immediately on your machine without configuring an external server:
-
-1. **Start the mock server**:
-
-   ```bash
-   node mock-server.js
-   ```
-
-   The mock server will listen on `http://localhost:3000`.
-
-2. The extensions are pre-configured with default host `http://localhost:3000`.
-3. Captured pages will be saved to `./archives/<timestamp>_<domain>/`:
-   - `page.html`
-   - `screenshot.png`
-   - `metadata.json`
-
----
-
-## 🌐 Installation Instructions
-
-### Chrome / Brave / Edge (Chromium)
-
-1. Open your Chromium-based browser and navigate to:
-   - Chrome: `chrome://extensions`
-   - Brave: `brave://extensions`
-   - Edge: `edge://extensions`
-2. Enable **Developer mode** (toggle switch in the top-right corner).
-3. Click **Load unpacked**.
-4. Select the `chrome/` folder inside this repository:
-   ```
-   /home/knack/github/web-browser-extention/chrome
-   ```
-5. Pin the extension to your toolbar.
-
----
-
-### Mozilla Firefox
-
-1. Open Firefox and navigate to:
-   ```
-   about:debugging#/runtime/this-firefox
-   ```
-2. Click **Load Temporary Add-on...**.
-3. Select the `manifest.json` file inside the `firefox/` folder:
-   ```
-   /home/knack/github/web-browser-extention/firefox/manifest.json
-   ```
-4. The extension is now loaded and available in your toolbar.
-
----
-
-## 📡 Server API Specification
-
-If you are developing your own archive server, implement the following endpoints:
-
-### 1. `POST /api/archive`
-
-Receives multipart form data:
-
-| Field Name   | Type                                       | Description                                       |
-| ------------ | ------------------------------------------ | ------------------------------------------------- |
-| `html`       | File (`page.html`, `text/html`)            | The complete serialized HTML DOM.                 |
-| `screenshot` | File (`screenshot.png`, `image/png`)       | PNG image of the visible viewport.                |
-| `metadata`   | File (`metadata.json`, `application/json`) | JSON metadata payload (see below).                |
-| `json`       | String (JSON)                              | Stringified version of metadata for text parsers. |
-| `url`        | String                                     | Target page URL.                                  |
-| `title`      | String                                     | Target page title.                                |
-| `timestamp`  | String (ISO 8601)                          | Time when archive was captured.                   |
-
-**Example `metadata.json`:**
-
-```json
-{
-  "url": "https://news.ycombinator.com",
-  "title": "Hacker News",
-  "timestamp": "2026-10-15T18:04:17.732Z",
-  "requestHeaders": {
-    "User-Agent": "Mozilla/5.0 ...",
-    "Accept": "text/html,...",
-    "Referer": "https://google.com"
-  },
-  "referrer": "",
-  "characterSet": "UTF-8",
-  "language": "en",
-  "viewport": { "width": 1440, "height": 900 },
-  "screen": { "width": 1920, "height": 1080, "pixelRatio": 1 },
-  "meta": {
-    "description": "...",
-    "ogTitle": "...",
-    "canonical": "..."
-  }
-}
+# local Firefox testing (web-ext run)
+bun run start:firefox
 ```
 
-**Success Response (200 OK):**
+### Production build
 
-```json
-{
-  "success": true,
-  "message": "Archived",
-  "id": "v-12345",
-  "versionCount": 1,
-  "archivedAt": "2026-10-15T18:04:17.732Z"
-}
+```bash
+bun run build
 ```
 
----
+This type-checks, builds `dist/chrome` and `dist/firefox`, and packages `dist/web-archiver-chrome.zip` / `dist/web-archiver-firefox.zip`. The full pipeline (icon rendering from `assets/icon.svg`, both targets, zips) is available via the build script:
 
-### 2. `GET /api/check?url=<encoded_url>`
-
-Used by the extension to check if a page is already archived and retrieve versions.
-
-**Response (if archived):**
-
-```json
-{
-  "archived": true,
-  "count": 2,
-  "lastArchived": "2026-10-15T18:04:17.732Z",
-  "versions": [
-    {
-      "id": "v-2",
-      "archivedAt": "2026-10-15T18:04:17.732Z"
-    },
-    {
-      "id": "v-1",
-      "archivedAt": "2026-10-14T10:15:00.000Z"
-    }
-  ]
-}
+```bash
+./build.sh            # dev build
+NODE_ENV=production ./build.sh
 ```
 
-**Response (if not archived):**
+## Using the extension
 
-```json
-{
-  "archived": false,
-  "count": 0,
-  "versions": []
-}
+1. After install, the options page opens automatically — configure your archive server's endpoints and API token there.
+2. Grant site access when prompted (needed to read pages and capture headers).
+3. Open a page and archive it via the toolbar popup or `Alt+Shift+A`.
+
+### Endpoints
+
+The extension is configured with a server URL and separate endpoints for:
+
+| Endpoint    | Purpose                                        |
+| ----------- | ---------------------------------------------- |
+| `archive`   | Submit a new page archive                      |
+| `check`     | Query archive status for a URL                 |
+| `pending`   | List/manage pending archives                   |
+| `tags`      | List known tags                                |
+| `sitesTags` | Set tags for a site                            |
+
+Endpoint configuration and a connection test ("Test endpoints") live in the options page.
+
+## Architecture
+
+```
+src/
+├── background/           # service worker (Chrome) / background script (Firefox)
+│   ├── index.ts          # event listeners, alarm scheduling, message handlers
+│   ├── archive.ts        # archiving flow + feedback, status checks, header patching
+│   ├── screenshot.ts     # full-page capture (tabs.captureTab / activeTab)
+│   ├── browser-scripting.ts
+│   ├── badge.ts          # badge/toast feedback
+│   ├── pending.ts        # pending queue refresh + tag updates
+│   ├── tags.ts           # tag listing / site tag management
+│   └── content-scripts/
+├── popup/                # toolbar popup UI (current page, tags, pending list)
+├── options/              # options page (server + endpoint + behavior settings)
+├── common/               # shared utilities: settings, storage, messaging, logging,
+│                         #   error handling (Result type), event bus, time helpers
+└── (manifest.config.ts)  # MV3 manifest, per-target (chrome/firefox) variations
 ```
 
-_(HTTP 404 is also accepted as "not archived")_
+Key design points:
 
----
+- **Per-target builds** — `TARGET=chrome|firefox` swaps the manifest background definition and runtime details; Firefox targets get `browser_specific_settings.gecko` and minimum version gates.
+- **Typed messaging** — every popup/options message type has a handler registered in the background (`registerHandlers`), compile-checked so no message type can be forgotten.
+- **Header capture** — taps `webRequest` `onSendHeaders`/`onHeadersReceived` for main-frame requests (including `extraHeaders` on Blink) and records them per tab.
+- **Centralized logging** — `@common/log` child loggers per subsystem; popup/options entries are forwarded into the background console.
 
-### 3. `GET /api/pending`
+Path aliases in `vite.config.ts`: `@src` → `src/`, `@common` → `src/common/`.
 
-Returns the list of pending URLs to archive.
+## Scripts
 
-**Response:**
+| Command                 | Description                                        |
+| ----------------------- | -------------------------------------------------- |
+| `bun run dev` / `dev:chrome` | Dev server (HMR), Chrome target               |
+| `bun run dev:firefox`   | Dev server (HMR), Firefox target                   |
+| `bun run build`         | Type-check + build + zip Chrome and Firefox        |
+| `bun run build:chrome` / `build:firefox` | Build a single target             |
+| `bun run typecheck`     | `tsc --noEmit`                                     |
+| `bun run lint:firefox`  | AMO linting of the Firefox build (`web-ext lint`)  |
+| `bun run start:firefox` | Launch Firefox with the built extension (`web-ext run`) |
 
-```json
-[
-  {
-    "id": "p-1",
-    "url": "https://en.wikipedia.org/wiki/Web_archiving",
-    "title": "Web Archiving - Wikipedia",
-    "addedAt": "2026-10-15T16:00:00.000Z"
-  },
-  {
-    "id": "p-2",
-    "url": "https://news.ycombinator.com",
-    "title": "Hacker News",
-    "addedAt": "2026-10-15T13:00:00.000Z"
-  }
-]
+Lint/format/typecheck in one shot: `vp check`.
+
+## Permissions
+
+- `activeTab`, `scripting`, `tabs` — capture the current page (HTML, screenshot, metadata)
+- `webRequest` (+ `<all_urls>` host permission) — record request/response headers for archived pages, restricted to `main_frame` http/https requests
+- `storage`, `alarms` — settings, cached state, and the pending-refresh schedule
+
+## Related
+
+- Requires a compatible archive server providing the endpoints listed above (a mock server is referenced via `devenv.nix` under `mock-server/`).
+
+## License
+
+Dual-licensed, at your option:
+
+- [MIT license](./LICENSE-MIT)
+- [Apache License, Version 2.0](./LICENSE-APACHE)
+
+```text
+SPDX-License-Identifier: MIT OR Apache-2.0
 ```
 
----
-
-### 4. `POST /api/pending/complete` (Optional)
-
-Notified when a pending item is archived or completed.
-
-**Request Body (`application/json`):**
-
-```json
-{
-  "id": "p-1",
-  "url": "https://en.wikipedia.org/wiki/Web_archiving"
-}
-```
-
----
-
-## ⚙️ Configuration & Options
-
-Click the **Gear icon** in the extension popup or right-click the extension and select **Options**:
-
-- **Host Archive URL**: Set your base server URL (`https://archive.example.com`).
-- **Endpoint Overrides**: Override derived endpoints if your API has non-standard paths.
-- **Authentication**: Bearer token, `X-API-Key`, or custom header.
-- **Pending Queue Auto-Refresh**: Set automatic polling interval (1 min, 5 min, 15 min, 30 min, 1 hour, or Manual).
-- **Visual Screenshot**: Toggle PNG screenshot capture on or off.
-- **Prompt on Pending URLs**: Show in-page floating banner when opening pending URLs.
-- **Toolbar Badge**: Display archived version count (`✓` / `2v`), pending queue count, or disable.
-- **Test Connection**: Instant interactive test to verify server reachability.
-
----
-
-## ⌨️ Keyboard Shortcuts
-
-| Action                   | Shortcut                                                          |
-| ------------------------ | ----------------------------------------------------------------- |
-| **Archive Current Page** | `Alt + Shift + A` (Mac: `Alt + Shift + A` / `Option + Shift + A`) |
-
-To customize shortcuts in your browser:
-
-- Chrome: `chrome://extensions/shortcuts`
-- Firefox: `about:addons` > Gear icon > **Manage Extension Shortcuts**
+Unless you explicitly state otherwise, any contribution you submit is intended to be dual-licensed under these terms.
