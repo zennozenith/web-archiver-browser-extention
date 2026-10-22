@@ -13,7 +13,7 @@ export interface NonEmptyArray<T> extends Array<T> {
 }
 
 export interface ReqeustOptions {
-  method?: "GET" | "POST";
+  method?: "GET" | "POST" | "PUT";
   body?: BodyInit;
   headers?: Record<string, string>;
   token?: string;

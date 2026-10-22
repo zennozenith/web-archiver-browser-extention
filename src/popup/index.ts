@@ -20,6 +20,11 @@ interface UiEvents {
   "render:archive:checking": void;
   "render:archive:checking:error": { archiveStatus: Exclude<ArchiveStatus, ArchiveOkStatus> };
   "render:archive:checking:ok": { archiveStatus: ArchiveOkStatus };
+  "render:tags": { archiveStatus: ArchiveOkStatus | null };
+  "tags:set": { url: Url; tags: string[] };
+  "tags:seed:defaults": { url: Url; existing: string[] };
+  "tags:set:ok": { tags: { id: string; name: string }[] };
+  "tags:set:error": { message: string };
   "error:any": { message: string };
   "error:any:clear": void;
 }
@@ -66,6 +71,14 @@ const btnArchive = document.getElementById("btn-archive") as HTMLButtonElement;
 const btnArchiveText = document.getElementById("btn-archive-text") as HTMLSpanElement;
 const btnArchiveShortcut = document.getElementById("btn-archive-shortcut") as HTMLSpanElement;
 
+// Tag Section DOM Nodes
+const currentTagsBlock = document.getElementById("current-tags-block") as HTMLDivElement;
+const currentTagsList = document.getElementById("current-tags") as HTMLDivElement;
+const currentTagsError = document.getElementById("current-tags-error") as HTMLDivElement;
+const currentTagInput = document.getElementById("current-tag-input") as HTMLInputElement;
+const btnAddTag = document.getElementById("current-tag-add") as HTMLButtonElement;
+const tagOptions = document.getElementById("tag-options") as HTMLDataListElement;
+
 // Pending Section DOM Nodes
 const pendingHeading = document.getElementById("pending-heading") as HTMLHeadingElement;
 const pendingFetchedTime = document.getElementById("pending-fetched-time") as HTMLSpanElement;
@@ -81,6 +94,14 @@ let tab: browser.Tabs.Tab,
   configured: Configured,
   hasPermission = true,
   shortcut = "";
+
+/* Site-wide tags for the current page's URL + global tag names for the (<datalist>) suggestions. */
+let siteTags: { id: string; name: string }[] = [];
+let tagsUrl: Url | null = null;
+let knownTags: string[] = [];
+/* URLs whose default tags were already offered this popup session
+ * (prevents re-adding them on every status re-check). */
+const defaultsSeeded = new Set<string>();
 
 function openTab(url: Url) {
   browser.tabs.create({ url });
@@ -106,6 +127,71 @@ function errorBox(msg: string, onClose: () => void = () => {}) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Tags (site-wide: shared by every version of this URL)               */
+/* ------------------------------------------------------------------ */
+
+function renderTagChips() {
+  currentTagsList.innerHTML = "";
+  for (const t of siteTags) {
+    const chip = document.createElement("span");
+    chip.className = "tag-chip";
+
+    const name = document.createElement("span");
+    name.textContent = t.name;
+    chip.appendChild(name);
+
+    const rm = document.createElement("button");
+    rm.className = "sm";
+    rm.textContent = "×";
+    rm.title = `Remove tag "${t.name}" from this site`;
+    rm.disabled = !tagsUrl || !configured.sitesTags;
+    rm.addEventListener("click", () => {
+      const remaining = siteTags.filter((x) => x.id !== t.id).map((x) => x.name);
+      uiBus.emit("tags:set", { url: tagsUrl as Url, tags: remaining });
+    });
+    chip.appendChild(rm);
+
+    currentTagsList.appendChild(chip);
+  }
+  if (!siteTags.length) {
+    const none = document.createElement("span");
+    none.className = "muted small";
+    none.textContent = "No tags yet";
+    currentTagsList.appendChild(none);
+  }
+}
+
+function renderTagSuggestions() {
+  const current = new Set(siteTags.map((t) => t.name.toLowerCase()));
+  tagOptions.innerHTML = "";
+  for (const name of knownTags.filter((n) => !current.has(n.toLowerCase()))) {
+    const opt = document.createElement("option");
+    opt.value = name;
+    tagOptions.appendChild(opt);
+  }
+}
+
+async function addTagFromInput() {
+  const value = currentTagInput.value.trim().slice(0, 64);
+  if (!value || !tagsUrl) return;
+  await uiBus.emitAsync("tags:set", {
+    url: tagsUrl,
+    tags: [...siteTags.map((t) => t.name), value],
+  });
+}
+
+/** Default tags from the settings that the site does not have yet (as provisional chips). */
+function missingDefaultTags(existing: { name: string }[] = []): { id: string; name: string }[] {
+  const have = new Set(existing.map((t) => t.name.toLowerCase()));
+  return Array.from(configured.defaultTags)
+    .filter((n) => {
+      const name = n.trim().slice(0, 64);
+      return name && !have.has(name.toLowerCase());
+    })
+    .map((name) => ({ id: name, name }));
+}
+
+/* ------------------------------------------------------------------ */
 /* App event handlers                                                 */
 /* ------------------------------------------------------------------ */
 
@@ -126,6 +212,17 @@ appBus.once("configured:get", async () => {
   if (stateResult.ok === true) {
     configured = stateResult.data;
     log.setLevel(configured.logLevel);
+
+    // Known tag names for the <datalist> suggestions (requires the tags endpoint).
+    if (configured.tags) {
+      const tagsResult = await sendToBackground("GET_TAGS");
+      if (tagsResult.ok === true) {
+        knownTags = tagsResult.data.map((t: { name: string }) => t.name);
+        renderTagSuggestions();
+      } else {
+        log.debug("Cannot load tag suggestions,", tagsResult.messages.toString());
+      }
+    }
 
     uiBus.emit("error:any:clear");
     uiBus.emit("render:anchorServer");
@@ -255,7 +352,10 @@ appBus.on("archive", async () => {
   uiBus.emit("render:archive");
 
   log.info("Archiving current page", { url: tab.url });
-  const archiveResult = await sendToBackground("ARCHIVE_TAB", { tabId: tab.id });
+  const archiveResult = await sendToBackground("ARCHIVE_TAB", {
+    tabId: tab.id,
+    tags: siteTags.map((t) => t.name),
+  });
 
   if (archiveResult.ok === false) {
     log.error("Archive failed, ", archiveResult.messages.toString());
@@ -293,12 +393,23 @@ appBus.on("archive:check", async () => {
 
   const archiveStatus = archiveStatusResult.data;
 
+  const okStatus = archiveStatus.state === "ok" ? archiveStatus : null;
+  uiBus.emit("render:tags", { archiveStatus: okStatus });
+
   // Status Pill & Recheck Button
   if (archiveStatus.state !== "ok") {
     uiBus.emit("render:archive:checking:error", { archiveStatus });
     return;
   }
 
+  // Page not archived yet: offer the user's default tags (persisted via
+  // SET_SITE_TAGS, which creates unknown tag names server-side).
+  if (!archiveStatus.archived) {
+    uiBus.emit("tags:seed:defaults", {
+      url: archiveStatus.url,
+      existing: (archiveStatus.tags ?? []).map((t) => t.name),
+    });
+  }
   uiBus.emit("render:archive:checking:ok", { archiveStatus });
 });
 
@@ -386,6 +497,7 @@ uiBus.on("render:archive:checking:error", ({ archiveStatus }) => {
 uiBus.on("render:archive:checking:ok", ({ archiveStatus }) => {
   btnRecheck.disabled = false;
 
+  log.info(archiveStatus.archived);
   if (archiveStatus.archived) {
     const count = archiveStatus.count || archiveStatus.versions.length || 1;
     currentStatusPill.className = "pill ok";
@@ -449,6 +561,75 @@ uiBus.on("render:archive:checking:ok", ({ archiveStatus }) => {
   btnArchiveText.textContent = "Archive new version";
 });
 
+uiBus.on("render:tags", ({ archiveStatus }) => {
+  currentTagsBlock.classList.toggle("hidden", !configured.sitesTags);
+
+  if (archiveStatus) {
+    tagsUrl = archiveStatus.url;
+    // Not archived yet (and no tags on the server): show the default tags as
+    // provisional chips until they have been persisted.
+    siteTags = (archiveStatus.tags ?? []).length
+      ? (archiveStatus.tags ?? [])
+      : missingDefaultTags();
+  } else {
+    siteTags = [];
+    tagsUrl = null;
+  }
+
+  currentTagInput.disabled = !configured.sitesTags || tagsUrl === null;
+  btnAddTag.disabled = currentTagInput.disabled;
+  renderTagChips();
+  renderTagSuggestions();
+});
+
+/* Persist default tags on a not-yet-archived site (once per URL per popup session). */
+uiBus.on("tags:seed:defaults", async ({ url, existing }) => {
+  const defaults = missingDefaultTags(existing.map((name) => ({ id: "", name })));
+  if (!configured.sitesTags || !defaults.length || defaultsSeeded.has(url)) return;
+  defaultsSeeded.add(url);
+
+  await uiBus.emitAsync("tags:set", {
+    url,
+    tags: [...existing, ...defaults.map((d) => d.name)],
+  });
+});
+
+uiBus.on("tags:set:error", ({ message }) => {
+  currentTagsError.innerHTML = "";
+  currentTagsError.appendChild(
+    errorBox(`Tags: ${message}`, () => {
+      currentTagsError.innerHTML = "";
+    }),
+  );
+});
+
+uiBus.on("tags:set:ok", () => {
+  currentTagsError.innerHTML = "";
+});
+
+/* Replace the site's tag set on the server, then re-check status (which re-renders tags). */
+uiBus.on("tags:set", async ({ url, tags }) => {
+  btnAddTag.disabled = true;
+
+  const result = await sendToBackground("SET_SITE_TAGS", { url, tags });
+  if (result.ok === false) {
+    log.error("Cannot save tags,", result.messages.toString());
+    uiBus.emit("tags:set:error", { message: result.messages.toString() });
+    // Allow the default-tags seeding to retry on the next status check.
+    defaultsSeeded.clear();
+    renderTagChips();
+    btnAddTag.disabled = !configured.sitesTags || tagsUrl === null;
+    return;
+  }
+
+  siteTags = result.data;
+  currentTagInput.value = "";
+  uiBus.emit("tags:set:ok", { tags: siteTags });
+  renderTagChips();
+  renderTagSuggestions();
+  btnAddTag.disabled = !configured.sitesTags || tagsUrl === null;
+});
+
 uiBus.on("render:archive", () => {
   btnArchiveText.textContent = "Archiving…";
   // btnArchive.disabled = archiving || !configured.server || !configured.archive || !archivable;
@@ -498,6 +679,12 @@ btnOpenOptions.forEach((v) => {
     window.close();
   });
 });
+btnAddTag.addEventListener("click", addTagFromInput);
+currentTagInput.addEventListener("keydown", async (e) => {
+  if (e.key !== "Enter" || e.isComposing) return;
+  e.preventDefault();
+  await addTagFromInput();
+});
 
 document.addEventListener("DOMContentLoaded", async () => {
   await appBus.emitAsync("loading");
@@ -518,30 +705,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       (await browser.commands.getAll()).find((c) => c.name === "archive-page")?.shortcut || "";
   } catch {}
 
+  // todo: configured:get should be emited before loading
   await appBus.emitAsync("configured:get");
   await appBus.emitAsync("pending:check");
 
   appBus.emit("loaded");
-  // const stale =
-  //   !state.status ||
-  //   state.status.url !== normalizeUrl(tab?.url ?? "") ||
-  //   Date.now() - (state.status.checkedAt || 0) > 60000;
-
-  // if (tab && isArchivable(tab.url ?? "") && state.configured.check && stale) {
-  //   recheck();
-  // }
-
-  // if (
-  //   state.configured.pending &&
-  //   (!state.pending || Date.now() - (state.pending.fetchedAt || 0) > 60000)
-  // ) {
-  //   doRefresh();
-  // }
-
-  // browser.storage.onChanged.addListener((ch, area) => {
-  //   if (area === "local" && ch.pending) {
-  //     state.pending = ch.pending.newValue as PendingResponseInStorage;
-  //     render();
-  //   }
-  // });
 });

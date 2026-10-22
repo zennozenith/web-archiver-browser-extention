@@ -25,6 +25,8 @@ const inputApiToken = document.querySelector("[data-key=api-token") as HTMLInput
 const inputArchiverUrl = document.querySelector("[data-key=archive-url") as HTMLInputElement;
 const inputPendingUrl = document.querySelector("[data-key=pending-url") as HTMLInputElement;
 const inputCheckUrl = document.querySelector("[data-key=check-url") as HTMLInputElement;
+const inputTagsUrl = document.querySelector("[data-key=tags-url") as HTMLInputElement;
+const inputSitesTagsUrl = document.querySelector("[data-key=sites-tags-url") as HTMLInputElement;
 const inputIncludeScreenshot = document.querySelector(
   "[data-key=include-screenshot",
 ) as HTMLInputElement;
@@ -62,6 +64,7 @@ const inputDirectArchiveDelaySec = document.querySelector(
   "[data-key=direct-archive-delay-sec",
 ) as HTMLInputElement;
 const selectTheme = document.querySelector("[data-key=select-theme") as HTMLSelectElement;
+const inputDefaultTags = document.querySelector("[data-key=default-tags") as HTMLInputElement;
 const inputShowBadge = document.querySelector("[data-key=show-badge") as HTMLInputElement;
 const selectLogLevel = document.querySelector("[data-key=select-log-level") as HTMLSelectElement;
 
@@ -118,12 +121,20 @@ function readForm(): ExtensionSettings {
       .map((v) => v.trim())
       .filter((v) => v.length > 0),
   );
+  const defaultTags = new Set(
+    inputDefaultTags.value
+      .split(",")
+      .map((v) => v.trim())
+      .filter((v) => v.length > 0),
+  );
   return {
     serverUrl: inputServerUrl.value,
     apiToken: inputApiToken.value,
     archiveUrl: { override: inputArchiverUrl.value !== "", url: inputArchiverUrl.value },
     pendingUrl: { override: inputPendingUrl.value !== "", url: inputPendingUrl.value },
     checkUrl: { override: inputCheckUrl.value !== "", url: inputCheckUrl.value },
+    tagsUrl: { override: inputTagsUrl.value !== "", url: inputTagsUrl.value },
+    sitesTagsUrl: { override: inputSitesTagsUrl.value !== "", url: inputSitesTagsUrl.value },
     includeScreenshot: inputIncludeScreenshot.checked,
     screenshotFormat: selectScreenshotFormat.value as ExtensionSettings["screenshotFormat"],
     jpegQuality: Number(inputJpegQuality.value),
@@ -141,6 +152,7 @@ function readForm(): ExtensionSettings {
     showBadge: inputShowBadge.checked,
     logLevel: selectLogLevel.value as ExtensionSettings["logLevel"],
     sensitiveHeaders,
+    defaultTags,
   };
 }
 
@@ -158,6 +170,7 @@ function fillForm(extentionSettings: ExtensionSettings): void {
   inputIncludeResponseHeaders.checked = extentionSettings.includeResponseHeaders;
   inputIncludeSensitiveHeaders.checked = extentionSettings.includeSensitiveHeaders;
   inputSensitiveHeaders.value = Array.from(extentionSettings.sensitiveHeaders).join(", ");
+  inputDefaultTags.value = Array.from(extentionSettings.defaultTags).join(", ");
   inputRequestTimeoutSec.value = String(extentionSettings.requestTimeoutSec);
   inputAutoCheck.checked = extentionSettings.autoCheck;
   inputPendingRefreshMinutes.value = String(extentionSettings.pendingRefreshMinutes);
@@ -188,6 +201,18 @@ function fillForm(extentionSettings: ExtensionSettings): void {
     inputCheckUrl.placeholder = endpoint.check;
   }
 
+  if (extentionSettings.tagsUrl.override) {
+    inputTagsUrl.value = endpoint.tags;
+  } else {
+    inputTagsUrl.placeholder = endpoint.tags;
+  }
+
+  if (extentionSettings.sitesTagsUrl.override) {
+    inputSitesTagsUrl.value = endpoint.sitesTags;
+  } else {
+    inputSitesTagsUrl.placeholder = endpoint.sitesTags;
+  }
+
   applyTheme(extentionSettings.theme);
 }
 
@@ -195,14 +220,23 @@ function fillForm(extentionSettings: ExtensionSettings): void {
  * Preview derived urls
  */
 function previewUrls(): void {
-  const { checkUrl, serverUrl, pendingUrl, archiveUrl } = readForm();
-  let endpoint = getEndpoint({ checkUrl, serverUrl, pendingUrl, archiveUrl });
+  const { checkUrl, serverUrl, pendingUrl, archiveUrl, tagsUrl, sitesTagsUrl } = readForm();
+  let endpoint = getEndpoint({
+    checkUrl,
+    serverUrl,
+    pendingUrl,
+    archiveUrl,
+    tagsUrl,
+    sitesTagsUrl,
+  });
 
   if (serverUrl === "") {
     const placeholderEndpoints = getEndpoint({
       archiveUrl,
       checkUrl,
       pendingUrl,
+      sitesTagsUrl,
+      tagsUrl,
       serverUrl: inputServerUrl.placeholder,
     });
 
@@ -212,21 +246,24 @@ function previewUrls(): void {
   inputArchiverUrl.placeholder = endpoint.archive;
   inputPendingUrl.placeholder = endpoint.pending;
   inputCheckUrl.placeholder = endpoint.check;
+  inputTagsUrl.placeholder = endpoint.tags;
+  inputSitesTagsUrl.placeholder = endpoint.sitesTags;
 
-  const tr1 = getElementById("effective1", HTMLTableRowElement);
-  tr1.children[0].textContent = "archive";
-  tr1.children[1].textContent = endpoint.archive;
-  tr1.children[2].textContent = archiveUrl.override ? "override" : "derived";
+  const orderedKeys = [
+    ["archive", endpoint.archive, archiveUrl.override ? "override" : "derived"],
+    ["pending", endpoint.pending, pendingUrl.override ? "override" : "derived"],
+    ["check", endpoint.check, checkUrl.override ? "override" : "derived"],
+    ["tags", endpoint.tags, tagsUrl.override ? "override" : "derived"],
+    ["sites tags", endpoint.sitesTags, sitesTagsUrl.override ? "override" : "derived"],
+  ] as const;
 
-  const tr2 = getElementById("effective2", HTMLTableRowElement);
-  tr2.children[0].textContent = "pending";
-  tr2.children[1].textContent = endpoint.pending;
-  tr2.children[2].textContent = pendingUrl.override ? "override" : "derived";
-
-  const tr3 = getElementById("effective3", HTMLTableRowElement);
-  tr3.children[0].textContent = "check";
-  tr3.children[1].textContent = endpoint.check;
-  tr3.children[2].textContent = checkUrl.override ? "override" : "derived";
+  document
+    .querySelectorAll<HTMLTableRowElement>("table[id=effective] > tbody > tr")
+    .forEach((el, index) => {
+      el.children[0].textContent = orderedKeys[index][0];
+      el.children[1].textContent = orderedKeys[index][1];
+      el.children[2].textContent = orderedKeys[index][2];
+    });
 }
 
 /**
@@ -234,21 +271,27 @@ function previewUrls(): void {
  */
 function validateUrls(extensionSettings: ExtensionSettings): Result<null> {
   // "serverUrl",
-  const { check, pending } = getEndpoint(extensionSettings);
+  const { check, pending, tags, sitesTags } = getEndpoint(extensionSettings);
 
-  if (pending !== "") {
-    try {
-      const url = new URL(pending);
-      if (!/^https?:$/.test(url.protocol))
+  for (const urlValue of [
+    [pending, "Pending"],
+    [tags, "Tags"],
+    [sitesTags, "Sites Tags"],
+  ] as const) {
+    if (urlValue[0] !== "") {
+      try {
+        const url = new URL(urlValue[0]);
+        if (!/^https?:$/.test(url.protocol))
+          return createError({
+            message: `${urlValue[1]} url must have protocol http/https`,
+            extra: { url: urlValue[0] },
+          });
+      } catch {
         return createError({
-          message: "Pending url must have protocol http/https",
-          extra: { url: pending },
+          message: `${urlValue[1]} url must be a valid http(s) URL`,
+          extra: { url: [0] },
         });
-    } catch {
-      return createError({
-        message: "Pending url must be a valid http(s) URL",
-        extra: { url: pending },
-      });
+      }
     }
   }
 
@@ -362,6 +405,8 @@ inputServerUrl.addEventListener("input", previewUrls);
 inputArchiverUrl.addEventListener("input", previewUrls);
 inputPendingUrl.addEventListener("input", previewUrls);
 inputCheckUrl.addEventListener("input", previewUrls);
+inputTagsUrl.addEventListener("input", previewUrls);
+inputSitesTagsUrl.addEventListener("input", previewUrls);
 
 // Initialize on page load
 document.addEventListener("DOMContentLoaded", async () => {

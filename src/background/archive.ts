@@ -8,6 +8,7 @@ import type { Int, ISODateTime, Url, Uuid } from "@common/types";
 import { session_storage_delete, session_storage_get, session_storage_set } from "@common/storage";
 import { getEndpoint, getExtentionSettings } from "@common/settings";
 import { isArchivable, normalizeUrl, sha256 } from "@common/index";
+import type { ApiTagRef } from "./tags";
 import { Screenshot, takeScreenshot } from "./screenshot";
 import { injectBanner } from "./browser-scripting";
 import { updateBadge } from "./badge";
@@ -43,6 +44,7 @@ export interface ApiSuccessArchiveResponse {
 export interface ApiArchiveVersionsResponse {
   archived: boolean;
   count: number;
+  tags: ApiTagRef[];
   versions: {
     id: string;
     archivedAt: ISODateTime;
@@ -50,6 +52,7 @@ export interface ApiArchiveVersionsResponse {
     title: string;
     htmlSize: number;
     hasScreenshot: boolean;
+    screenshotExt?: string | null;
   }[];
   lastArchivedAt?: ISODateTime;
 }
@@ -168,7 +171,10 @@ function applyStatusBadge(tabId: Int, archiveStatus: ArchiveStatus | null): Prom
   });
 }
 
-async function archiveTab(tabId: Int): Promise<
+async function archiveTab(
+  tabId: Int,
+  { tags }: { tags?: string[] } = {},
+): Promise<
   Result<{
     response: ApiSuccessArchiveResponse;
     warnings: string[];
@@ -239,7 +245,7 @@ async function archiveTab(tabId: Int): Promise<
     }
 
     const warnings: string[] = [];
-    let maybeScreenshot: Result<Screenshot> = createError({ message: "" });
+    let maybeScreenshot: Result<Screenshot> | null = null;
 
     if (extensionSettings.includeScreenshot) {
       const doneShot = log.time("screenshot");
@@ -304,7 +310,7 @@ async function archiveTab(tabId: Int): Promise<
       files: {
         html: { name: "page.html", size: htmlBlob.size, sha256: await sha256(htmlBlob) },
         screenshot:
-          maybeScreenshot.ok === true
+          maybeScreenshot?.ok === true
             ? {
                 name: `screenshot.${maybeScreenshot.data.ext}`,
                 size: maybeScreenshot.data.blob.size,
@@ -323,11 +329,11 @@ async function archiveTab(tabId: Int): Promise<
       "metadata.json",
     );
     formData.append("html", htmlBlob, "page.html");
-    if (maybeScreenshot.ok) {
-      formData.append(
-        "screenshot-format",
-        new Blob([maybeScreenshot.data.format], { type: "text/plain" }),
-      );
+    if (tags?.length) {
+      formData.append("tags", JSON.stringify(tags));
+    }
+    if (maybeScreenshot?.ok) {
+      formData.append("screenshot-format", maybeScreenshot.data.format);
       formData.append(
         "screenshot",
         maybeScreenshot.data.blob,
@@ -338,7 +344,7 @@ async function archiveTab(tabId: Int): Promise<
     log.info("Uploading archive", {
       url: page.url,
       htmlBytes: htmlBlob.size,
-      screenshotBytes: maybeScreenshot.ok ? maybeScreenshot.data.blob.size : null,
+      screenshotBytes: maybeScreenshot?.ok ? maybeScreenshot.data.blob.size : null,
     });
 
     const result = await request<ApiSuccessArchiveResponse>(endpoint.archive, {
@@ -371,7 +377,7 @@ async function archiveTab(tabId: Int): Promise<
 
 export async function archiveWithFeedback(
   tabId: Int,
-  { toast }: { toast: boolean },
+  { toast, tags }: { toast: boolean; tags?: string[] },
 ): Promise<
   Result<{
     response: ApiSuccessArchiveResponse;
@@ -379,7 +385,7 @@ export async function archiveWithFeedback(
   }>
 > {
   try {
-    const result = await archiveTab(tabId);
+    const result = await archiveTab(tabId, { tags });
     if (result.ok === false) {
       return result;
     }

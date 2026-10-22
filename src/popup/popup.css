@@ -289,6 +289,81 @@ ul {
   border: 0;
 }
 
+/* Site-wide tags (popup, current page card) */
+.tags-block {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tags-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.tags .muted.small {
+  width: 100%;
+}
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  padding: 1px 4px 1px 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.tag-chip button {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 2px;
+  font-size: 13px;
+}
+
+.tag-chip button:hover:not(:disabled) {
+  color: var(--err);
+}
+
+.tag-chip button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.tag-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12px;
+}
+
+.tag-input:focus-visible {
+  outline: 1px solid var(--accent);
+  border-color: var(--accent);
+}
+
+.tags-error:empty {
+  display: none;
+}
+
 .pending {
   max-height: 240px;
   overflow-y: auto;

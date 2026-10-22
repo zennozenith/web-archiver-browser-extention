@@ -14,6 +14,7 @@ import { PendingResponseInStorage, refreshPending, testPending } from "./pending
 import { bgRootlog as log, receiveForwardedLogsInBackground } from "@common/log";
 import { session_storage_delete, session_storage_get } from "@common/storage";
 import { isArchivable } from "@common/index";
+import { listTags, setSiteTags } from "./tags";
 import { Message, MessageData, MessagePayload, MessageType } from "@common/messaging";
 import {
   Configured,
@@ -227,9 +228,12 @@ registerHandlers({
       archive: endpoint.archive !== "",
       pending: endpoint.pending !== "",
       check: endpoint.check !== "",
+      tags: endpoint.tags !== "",
+      sitesTags: endpoint.sitesTags !== "",
       pendingLimit: extentionSettings.pendingLimit,
       logLevel: extentionSettings.logLevel,
       sensitiveHeaders: extentionSettings.sensitiveHeaders,
+      defaultTags: extentionSettings.defaultTags,
     });
   },
 
@@ -254,8 +258,24 @@ registerHandlers({
     const t = await refreshPending();
     return createOk({ ok: t === null ? false : t.ok });
   },
-  ARCHIVE_TAB: async ({ tabId }) => {
-    return await archiveWithFeedback(tabId, { toast: false });
+  ARCHIVE_TAB: async ({ tabId, tags }) => {
+    // `tags` is optional: when given, they are sent along with the archive request
+    // (the server merges them into the site's existing tags, creating unknown ones).
+    return await archiveWithFeedback(tabId, { toast: false, tags });
+  },
+
+  GET_TAGS: async () => {
+    return await listTags();
+  },
+
+  SET_SITE_TAGS: async ({ url, tags }, sender) => {
+    const result = await setSiteTags(url, tags);
+    // Tags are site-wide: after changing them, refresh the cached status so the
+    // next GET_ARCHIVE for this tab returns the new tag list.
+    if (result.ok === true && sender?.tab?.id !== undefined) {
+      await session_storage_delete(`status:${sender.tab.id}`);
+    }
+    return result;
   },
   OPEN_AND_ARCHIVE: async ({ url }) => {
     await openAndArchive(url);

@@ -11,6 +11,8 @@ export interface ExtensionSettings {
   autoCheck: boolean;
   archiveUrl: OverrideUrl;
   checkUrl: OverrideUrl;
+  tagsUrl: OverrideUrl;
+  sitesTagsUrl: OverrideUrl;
   directArchiveDelaySec: Int;
   directArchiveMode: "prompt" | "auto";
   fullPageScreenshot: boolean; // Firefox only
@@ -28,6 +30,7 @@ export interface ExtensionSettings {
   showBadge: boolean;
   theme: "auto" | "light" | "dark";
   sensitiveHeaders: Set<string>;
+  defaultTags: Set<string>;
 }
 
 export interface Endpoint {
@@ -35,6 +38,8 @@ export interface Endpoint {
   archive: Url;
   pending: Url;
   check: Url;
+  tags: Url;
+  sitesTags: Url;
 }
 
 export interface Configured {
@@ -43,9 +48,12 @@ export interface Configured {
   archive: boolean;
   pending: boolean;
   check: boolean;
+  tags: boolean;
+  sitesTags: boolean;
   pendingLimit: number;
   logLevel: LevelSetting;
   sensitiveHeaders: Set<string>;
+  defaultTags: Set<string>;
 }
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
@@ -54,6 +62,8 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   autoCheck: true,
   archiveUrl: { override: false, url: "" },
   checkUrl: { override: false, url: "" },
+  tagsUrl: { override: false, url: "" },
+  sitesTagsUrl: { override: false, url: "" },
   directArchiveDelaySec: 2,
   directArchiveMode: "prompt", // prompt | auto
   fullPageScreenshot: false, // Firefox only
@@ -71,6 +81,7 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   showBadge: true,
   theme: "auto",
   sensitiveHeaders: new Set(["cookie", "authorization", "proxy-authorization", "set-cookie"]),
+  defaultTags: new Set(["read-later"]),
 };
 
 export const EXTENSION_SETTINGS_SESSION_KEY = "extension_settings" as const;
@@ -80,10 +91,14 @@ export function getEndpoint({
   pendingUrl,
   serverUrl,
   archiveUrl,
+  sitesTagsUrl,
+  tagsUrl,
 }: {
   checkUrl: OverrideUrl;
   archiveUrl: OverrideUrl;
   pendingUrl: OverrideUrl;
+  tagsUrl: OverrideUrl;
+  sitesTagsUrl: OverrideUrl;
   serverUrl: Url;
 }): Endpoint {
   const baseUrl = (serverUrl ?? "").trim().replace(/\/+\$/, "").replace(/\/$/, "");
@@ -94,11 +109,15 @@ export function getEndpoint({
           archive: `${baseUrl}/api/archive`,
           pending: `${baseUrl}/api/pending`,
           check: `${baseUrl}/api/check`,
+          tags: `${baseUrl}/api/tags`,
+          sitesTags: `${baseUrl}/api/sites/tags`,
         }
       : {
           archive: "",
           pending: "",
           check: "",
+          tags: "",
+          sitesTags: "",
         };
 
   return {
@@ -106,6 +125,8 @@ export function getEndpoint({
     archive: archiveUrl.override ? archiveUrl.url : derivedUrls.archive,
     pending: pendingUrl.override ? pendingUrl.url : derivedUrls.pending,
     check: checkUrl.override ? checkUrl.url : derivedUrls.check,
+    tags: tagsUrl.override ? tagsUrl.url : derivedUrls.tags,
+    sitesTags: sitesTagsUrl.override ? sitesTagsUrl.url : derivedUrls.sitesTags,
   };
 }
 
@@ -113,14 +134,6 @@ export function getEndpoint({
  * Retrieve user settings from browser.storage.sync or in memory map
  */
 export async function getExtentionSettings(): Promise<ExtensionSettings> {
-  // if (!browser.storage.session) {
-  //   return (_mem.get(STORAGE_KEYS.SETTINGS) as ExtensionSettings) ?? { ...DEFAULT_SETTINGS };
-  // }
-
-  // const result = await browser.storage.sync.get(STORAGE_KEYS.SETTINGS);
-  // const stored = (result[STORAGE_KEYS.SETTINGS] as Partial<ExtensionSettings>) ?? {};
-  // return { ...DEFAULT_SETTINGS, ...stored };
-  //
   const stored =
     ((await local_storage_get(EXTENSION_SETTINGS_SESSION_KEY)) as Partial<ExtensionSettings>) ?? {};
   return { ...DEFAULT_SETTINGS, ...stored };

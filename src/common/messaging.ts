@@ -6,6 +6,7 @@ import { Configured, Endpoint } from "./settings.ts";
 import { ApiSuccessArchiveResponse, ArchiveStatus } from "@src/background/archive.ts";
 import { PendingResponseInStorage } from "@src/background/pending.ts";
 import { TestEndpointResponse } from "@src/background/reqwest.ts";
+import { ApiTag, ApiTagRef } from "@src/background/tags.ts";
 
 const log = rootLog.child("messaging");
 
@@ -21,15 +22,17 @@ export interface MessageMap {
     payload: { endpoints: Endpoint; token?: string };
     data: TestEndpointResponse[];
   };
+  GET_TAGS: { payload: undefined; data: ApiTag[] };
   GET_ARCHIVE: { payload: { tabId: Int }; data: ArchiveStatus };
   GET_PENDING: { payload: undefined; data: PendingResponseInStorage };
   ARCHIVE_TAB: {
-    payload: { tabId: Int };
+    payload: { tabId: Int; tags: string[] };
     data: {
       response: ApiSuccessArchiveResponse;
       warnings: string[];
     };
   };
+  SET_SITE_TAGS: { payload: { url: Url; tags: string[] }; data: ApiTagRef[] };
   REFRESH_PENDING: { payload: undefined; data: { ok: boolean } };
   OPEN_AND_ARCHIVE: { payload: { url: Url }; data: void };
   ARCHIVE_FROM_PAGE: {

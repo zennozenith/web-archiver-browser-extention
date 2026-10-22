@@ -151,6 +151,28 @@
             style="font-weight: 400; opacity: 0.85"
           ></span>
         </button>
+
+        <!-- Site-wide tags (shared across all versions of this URL) -->
+        <div id="current-tags-error" class="tags-error"></div>
+        <div id="current-tags-block" class="tags-block">
+          <div class="tags-head">
+            <span class="muted small">Tags</span>
+          </div>
+          <div id="current-tags" class="tags"></div>
+          <div class="row">
+            <input
+              id="current-tag-input"
+              type="text"
+              list="tag-options"
+              maxlength="64"
+              placeholder="Add tag…"
+              class="tag-input"
+              aria-label="Add a tag to this page's site"
+            />
+            <button id="current-tag-add" class="" type="button">Add</button>
+          </div>
+          <datalist id="tag-options"></datalist>
+        </div>
       </section>
 
       <!-- Section Card: Pending Card -->
