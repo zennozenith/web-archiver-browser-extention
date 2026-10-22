@@ -1,3 +1,0 @@
-procs:
-  tsc:
-    shell: watchexec --watch index.ts -- tsc --ignoreConfig index.ts
