@@ -5,6 +5,8 @@ export interface BannerOpts {
   kind: "ok" | "err" | (string & {});
   text: string;
   mode: "prompt" | "toast" | (string & {});
+  /* optional (prompt mode): tag names offered as a chip row before confirming */
+  tags?: string[];
 }
 
 export interface Page {
@@ -84,7 +86,7 @@ export function pageBanner(opts: BannerOpts) {
   const root = host.attachShadow({ mode: "closed" });
   const style = document.createElement("style");
   style.textContent =
-    ".b{font:14px/1.4 system-ui,sans-serif;color:#fff;background:#1f2937;border-radius:10px;padding:12px 14px;box-shadow:0 6px 24px rgba(0,0,0,.35);max-width:340px;display:flex;flex-direction:column;gap:10px;word-break:break-word}.b.ok{background:#15803d}.b.err{background:#b91c1c}.r{display:flex;gap:8px;justify-content:flex-end}button{font:inherit;border:0;border-radius:6px;padding:5px 12px;cursor:pointer;background:#fff;color:#111}button.p{background:#3b82f6;color:#fff}";
+    ".b{font:14px/1.4 system-ui,sans-serif;color:#fff;background:#1f2937;border-radius:10px;padding:12px 14px;box-shadow:0 6px 24px rgba(0,0,0,.35);max-width:340px;display:flex;flex-direction:column;gap:10px;word-break:break-word}.b.ok{background:#15803d}.b.err{background:#b91c1c}.r{display:flex;gap:8px;justify-content:flex-end}button{font:inherit;border:0;border-radius:6px;padding:5px 12px;cursor:pointer;background:#fff;color:#111}button.p{background:#3b82f6;color:#fff}.c{display:flex;flex-wrap:wrap;gap:6px}.c button{border-radius:999px;font-size:12px;padding:3px 10px;opacity:.45}.c button.on{opacity:1;outline:1px solid #fff}";
   const box = document.createElement("div");
   root.append(style, box);
 
@@ -114,11 +116,17 @@ export function pageBanner(opts: BannerOpts) {
       box.append(row);
     }
   }
+  /* Tags chosen in the prompt chip row (top-of-list = to be attached). */
+  const chipTags = opts.mode === "prompt" ? (opts.tags ?? []) : [];
+  const chosen = new Set(chipTags);
+
   const archive = async () => {
     render("", "Archiving…", []);
 
     const result: Result<ArchiveStatus> = await api.runtime.sendMessage({
       type: "ARCHIVE_FROM_PAGE",
+      // explicitly selected tags; pending-queue tags merge in the background
+      payload: { tags: [...chosen] },
     });
 
     if (result.ok === true && result.data.state === "ok") {
@@ -134,11 +142,36 @@ export function pageBanner(opts: BannerOpts) {
     }
   };
 
+  const renderChips = () => {
+    if (!chipTags.length) return undefined;
+    const row = document.createElement("div");
+    row.className = "c";
+    for (const name of chipTags) {
+      const c = document.createElement("button");
+      c.textContent = name;
+      c.className = chosen.has(name) ? "on" : "";
+      c.title = "Attach tag";
+      c.onclick = () => {
+        if (chosen.has(name)) {
+          chosen.delete(name);
+          c.className = "";
+        } else {
+          chosen.add(name);
+          c.className = "on";
+        }
+      };
+      row.append(c);
+    }
+    // between the text and the action buttons
+    box.insertBefore(row, box.querySelector(".r"));
+    return row;
+  };
   if (opts.mode === "prompt") {
     render("", opts.text || "Archive this page?", [
       ["Dismiss", close],
       ["Archive now", archive, true],
     ]);
+    renderChips();
   } else {
     render(opts.kind, opts.text, [["Close", close]]);
     if (opts.kind === "ok") timer = setTimeout(close, 5000);

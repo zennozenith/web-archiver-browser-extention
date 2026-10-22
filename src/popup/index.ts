@@ -22,9 +22,10 @@ interface UiEvents {
   "render:archive:checking:ok": { archiveStatus: ArchiveOkStatus };
   "render:tags": { archiveStatus: ArchiveOkStatus | null };
   "tags:set": { url: Url; tags: string[] };
-  "tags:seed:defaults": { url: Url; existing: string[] };
   "tags:set:ok": { tags: { id: string; name: string }[] };
   "tags:set:error": { message: string };
+  /* Seed a not-yet-archived site with the user's default tags (once per URL). */
+  "tags:seed:defaults": { url: Url; existing: string[] };
   "error:any": { message: string };
   "error:any:clear": void;
 }
@@ -303,13 +304,41 @@ appBus.on("pending:check", async () => {
       urlDiv.title = it.url;
       urlDiv.textContent = it.url + (it.addedAt ? ` · ${timeAgo(it.addedAt)}` : "");
       growDiv.appendChild(urlDiv);
+      // Tags queued for this URL (attached to the site on first archive).
+      const tags = (it.tags ?? []) as string[];
+      const tagsDiv = document.createElement("div");
+      tagsDiv.className = "small muted";
+      tagsDiv.textContent = tags.length ? `Tags: ${tags.join(", ")}` : "No tags";
+      growDiv.appendChild(tagsDiv);
       li.appendChild(growDiv);
+
+      // Tag editor
+      const tagBtn = document.createElement("button");
+      tagBtn.className = "sm";
+      tagBtn.title = "Edit tags for this queued page";
+      tagBtn.textContent = "Tags";
+      tagBtn.addEventListener("click", async () => {
+        const raw = prompt("Tags for this page (comma separated)", tags.join(", ")) ?? "";
+        const next = raw
+          .split(",")
+          .map((t) => t.trim().slice(0, 64))
+          .filter(Boolean);
+        const result = await sendToBackground("SET_PENDING_TAGS", { id: it.id, tags: next });
+        if (result.ok === false) {
+          log.error("Cannot save pending tags,", result.messages.toString());
+          uiBus.emit("error:any", { message: result.messages.toString() });
+          return;
+        }
+        await sendToBackground("REFRESH_PENDING");
+        appBus.emit("pending:check");
+      });
+      li.appendChild(tagBtn);
+
       const actionBtn = document.createElement("button");
       actionBtn.className = "sm";
       actionBtn.title = "Open in a new tab and archive";
       actionBtn.textContent = "Archive";
       actionBtn.addEventListener("click", async () => {
-        log.debug("Pending list archive requested", { url: it.url });
         log.debug("Pending list archive requested", { url: it.url });
         await sendToBackground("OPEN_AND_ARCHIVE", { url: it.url });
         window.close();
@@ -396,20 +425,21 @@ appBus.on("archive:check", async () => {
   const okStatus = archiveStatus.state === "ok" ? archiveStatus : null;
   uiBus.emit("render:tags", { archiveStatus: okStatus });
 
+  // Page not archived yet: offer the user's default tags (persisted via
+  // SET_SITE_TAGS, which creates unknown tag names server-side).
+  if (archiveStatus.state === "ok" && !archiveStatus.archived) {
+    uiBus.emit("tags:seed:defaults", {
+      url: archiveStatus.url,
+      existing: (archiveStatus.tags ?? []).map((t) => t.name),
+    });
+  }
+
   // Status Pill & Recheck Button
   if (archiveStatus.state !== "ok") {
     uiBus.emit("render:archive:checking:error", { archiveStatus });
     return;
   }
 
-  // Page not archived yet: offer the user's default tags (persisted via
-  // SET_SITE_TAGS, which creates unknown tag names server-side).
-  if (!archiveStatus.archived) {
-    uiBus.emit("tags:seed:defaults", {
-      url: archiveStatus.url,
-      existing: (archiveStatus.tags ?? []).map((t) => t.name),
-    });
-  }
   uiBus.emit("render:archive:checking:ok", { archiveStatus });
 });
 
@@ -497,7 +527,6 @@ uiBus.on("render:archive:checking:error", ({ archiveStatus }) => {
 uiBus.on("render:archive:checking:ok", ({ archiveStatus }) => {
   btnRecheck.disabled = false;
 
-  log.info(archiveStatus.archived);
   if (archiveStatus.archived) {
     const count = archiveStatus.count || archiveStatus.versions.length || 1;
     currentStatusPill.className = "pill ok";
@@ -705,7 +734,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       (await browser.commands.getAll()).find((c) => c.name === "archive-page")?.shortcut || "";
   } catch {}
 
-  // todo: configured:get should be emited before loading
   await appBus.emitAsync("configured:get");
   await appBus.emitAsync("pending:check");
 

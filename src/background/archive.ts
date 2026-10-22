@@ -52,6 +52,7 @@ export interface ApiArchiveVersionsResponse {
     title: string;
     htmlSize: number;
     hasScreenshot: boolean;
+    /* "png" | "jpg"; extension of the stored screenshot file (null on legacy rows) */
     screenshotExt?: string | null;
   }[];
   lastArchivedAt?: ISODateTime;
@@ -76,6 +77,23 @@ const busyTabs = new Set<Int>();
 const inflight = new Map<`${Int}|${Url}`, Promise<Result<ArchiveStatus>>>();
 const sleep = (ms: Int) => new Promise((resolve) => setTimeout(resolve, ms));
 const headerMemory = new Map<Int, Partial<HeadersDetails>>();
+
+/** Merge tag name lists into one, deduped case-insensitively, order preserved. */
+function mergeTagNames(...lists: (string[] | undefined)[]): string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const list of lists) {
+    for (const raw of list ?? []) {
+      const name = String(raw ?? "")
+        .trim()
+        .slice(0, 64);
+      if (!name || seen.has(name.toLowerCase())) continue;
+      seen.add(name.toLowerCase());
+      names.push(name);
+    }
+  }
+  return names;
+}
 
 export function deleteHeaderMemory(tabId: Int) {
   headerMemory.delete(tabId);
@@ -156,11 +174,15 @@ function applyStatusBadge(tabId: Int, archiveStatus: ArchiveStatus | null): Prom
   if (archiveStatus.state === "ok" && archiveStatus.archived) {
     const n = archiveStatus.count || archiveStatus.versions?.length || 0;
     const when = archiveStatus.versions?.[0]?.archivedAt ?? archiveStatus.lastArchivedAt;
+    const tagNames = mergeTagNames(archiveStatus.tags?.map((t) => t.name));
     return updateBadge({
       tabId,
       text: n ? (n > 99 ? "99+" : String(n)) : "✓",
       color: "#188038",
-      title: `Archived${n ? ` — ${n} version${n === 1 ? "" : "s"}` : ""}${when ? `\nLast: ${formatTime(when)}` : ""}`,
+      title:
+        `Archived${n ? ` — ${n} version${n === 1 ? "" : "s"}` : ""}` +
+        (tagNames.length ? `\nTags: ${tagNames.join(", ")}` : "") +
+        (when ? `\nLast: ${formatTime(when)}` : ""),
     });
   }
 
@@ -214,6 +236,11 @@ async function archiveTab(
         extra: { url: tab.url },
       });
     }
+
+    // Tag names are deduped case-insensitively; the server additionally merges
+    // any tags queued with this URL in the pending queue, so nothing needs to
+    // be attached client-side.
+    const allTags = mergeTagNames(tags);
 
     log.info("Archiving page", { tabId, url, title: tab.title });
 
@@ -329,8 +356,9 @@ async function archiveTab(
       "metadata.json",
     );
     formData.append("html", htmlBlob, "page.html");
-    if (tags?.length) {
-      formData.append("tags", JSON.stringify(tags));
+    // Includes tags queued via the pending queue (created server-side if unknown).
+    if (allTags.length) {
+      formData.append("tags", JSON.stringify(allTags));
     }
     if (maybeScreenshot?.ok) {
       formData.append("screenshot-format", maybeScreenshot.data.format);
@@ -556,13 +584,18 @@ export async function getArchiveStatus(tabId: Int): Promise<Result<ArchiveStatus
   return inflightStatusPromise;
 }
 
-export async function openAndArchive(url: Url) {
+export async function openAndArchive(url: Url, tags: string[] = []) {
   const tab = await browser.tabs.create({ url, active: true });
   logCapture.info("Opened new tab for direct archive", { url, tabId: tab.id });
-  await session_storage_set(`open:${tab.id}`, { url, at: Date.now() });
+  await session_storage_set(`open:${tab.id}`, { url, at: Date.now(), tags });
 }
 
 export async function handleOpened(tabId: Int) {
+  const opened = (await session_storage_get(`open:${tabId}`)) as {
+    url: Url;
+    at: number;
+    tags?: string[];
+  };
   await session_storage_delete(`open:${tabId}`);
   const s = await getExtentionSettings();
   await sleep(Math.max(0, Number(s.directArchiveDelaySec) || 0) * 1000);
@@ -573,9 +606,22 @@ export async function handleOpened(tabId: Int) {
     return;
   }
   logCapture.debug(`Direct-archive mode: ${s.directArchiveMode}`, { tabId });
+
   if (s.directArchiveMode === "auto") {
-    archiveWithFeedback(tabId, { toast: true });
+    // Per-URL pending tags are merged inside archiveTab automatically.
+    archiveWithFeedback(tabId, { toast: true, tags: opened?.tags ?? undefined });
   } else {
-    injectBanner(tabId, { kind: "", mode: "prompt", text: "Archive this page?" });
+    // Prompt mode: offer a tag chip row (site's current/default tags, preselected)
+    // before confirming; chosen tags are sent with ARCHIVE_FROM_PAGE.
+    const defaults = mergeTagNames(Array.from(s.defaultTags), opened?.tags);
+    const status = await getArchiveStatus(tabId);
+    const siteTags =
+      status.ok === true && status.data.state === "ok" ? status.data.tags.map((t) => t.name) : [];
+    injectBanner(tabId, {
+      kind: "",
+      mode: "prompt",
+      text: "Archive this page?",
+      tags: mergeTagNames(siteTags, defaults),
+    });
   }
 }

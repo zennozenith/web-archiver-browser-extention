@@ -1,112 +1,162 @@
 import browser from "webextension-polyfill";
 
-import { createError, isStandardError, Result } from "@common/error";
-import { bgRootlog } from "@common/log";
+import { createError, createOk, type Result } from "@common/error";
+import { bgRootlog as log } from "@common/log";
+import type { Url } from "@common/types";
 import { getEndpoint, getExtentionSettings } from "@common/settings";
-import { request, TestEndpointResponse } from "./reqwest";
-import type { ISODateTime, Url } from "@common/types";
+import { request } from "./reqwest";
+import type { TestEndpointResponse } from "./reqwest";
 
-export interface ApiCheckPendingResponse {
-  items: {
-    id: string;
-    url: Url;
-    title: string;
-    addedAt: ISODateTime;
-  }[];
+/* Pending queue client.
+ *
+ * Tags queued with a URL live on the SERVER (`pending.tags` on both servers):
+ * - POST   /api/pending      { url, title?, tags? }
+ * - GET    /api/pending      -> { items: [{ id, url, title, addedAt, tags }], total }
+ * - PATCH  /api/pending/:id  { tags }          replace the queued tags
+ * The archive handler merges the queued tags into the site on first archive and
+ * removes the pending row, so nothing needs to be kept in extension storage. */
+
+export interface PendingItem {
+  id: string;
+  url: Url;
+  title: string;
+  addedAt: string;
+  /* tag names queued with this URL (server-authoritative) */
+  tags?: string[];
+}
+
+export interface PendingResponseInStorage {
+  fetchedAt: number;
+  total: number;
+  items: PendingItem[];
+  error?: string;
+}
+
+interface ApiPendingListResponse {
+  items: PendingItem[];
   total: number;
 }
-export interface PendingResponseInStorage extends ApiCheckPendingResponse {
-  fetchedAt: number;
-  error: string;
+
+async function pendingEndpoint(): Promise<string | null> {
+  const settings = await getExtentionSettings();
+  const endpoint = getEndpoint(settings);
+  return endpoint.pending ? endpoint.pending.split("?")[0].replace(/\/$/, "") : null;
 }
 
-const log = bgRootlog.child("pending");
+/** Fetch the server's pending queue and cache the result in
+ *  browser.storage.local ("pending"). */
+export async function refreshPending(): Promise<{ ok: boolean } | null> {
+  const settings = await getExtentionSettings();
+  const endpoint = getEndpoint(settings);
+  if (!endpoint.pending) {
+    log.debug("Pending URL not configured, refresh skipped");
+    return null;
+  }
 
-export async function testPending(pendingUrl: Url, token?: string): Promise<TestEndpointResponse> {
-  const responseData = await request<ApiCheckPendingResponse>(pendingUrl, {
-    token,
-    timeoutMs: 15000,
+  const res = await request<ApiPendingListResponse>(endpoint.pending, {
+    token: settings.apiToken,
+    timeoutMs: 20000,
   });
-  if (!responseData.ok) {
+
+  let previous: PendingResponseInStorage | null = null;
+  try {
+    const { pending } = (await browser.storage.local.get({ pending: null })) as {
+      pending: PendingResponseInStorage | null;
+    };
+    previous = pending;
+  } catch {}
+
+  let data: PendingResponseInStorage;
+  if (res.ok) {
+    data = {
+      fetchedAt: Date.now(),
+      total: res.data.total,
+      items: res.data.items,
+    };
+  } else {
+    // Keep the last good list, surface the error to the popup.
+    data = {
+      fetchedAt: Date.now(),
+      total: previous?.total ?? 0,
+      items: previous?.items ?? [],
+      error: res.messages.toString(),
+    };
+  }
+  await browser.storage.local.set({ pending: data });
+
+  log[res.ok ? "debug" : "warn"]("Pending refresh", { ok: res.ok, total: data.total });
+  return { ok: res.ok };
+}
+
+/** Add an URL (with optional queued tags) to the server's pending queue. */
+export async function addPending(
+  url: Url,
+  { title = "", tags = [] }: { title?: string; tags?: string[] } = {},
+): Promise<Result<PendingItem>> {
+  const base = await pendingEndpoint();
+  if (!base) {
+    log.debug("Pending URL not configured, cannot add");
+    return createError({
+      logger: log,
+      message: "Pending URL is not configured. Open the extension preferences.",
+    });
+  }
+
+  const settings = await getExtentionSettings();
+  const res = await request<{ success: true; item: PendingItem }>(base, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url, title: title.trim(), tags }),
+    token: settings.apiToken,
+    timeoutMs: 20000,
+  });
+  if (!res.ok) {
+    return res;
+  }
+  return createOk({ ...res.data.item, tags: res.data.item.tags ?? tags });
+}
+
+/** PATCH /api/pending/:id — replace the tags queued with a URL (server-side). */
+export async function updatePendingTags(id: string, tags: string[]): Promise<Result<PendingItem>> {
+  const base = await pendingEndpoint();
+  if (!base) {
+    log.debug("Pending URL not configured, cannot edit");
+    return createError({
+      logger: log,
+      message: "Pending URL is not configured. Open the extension preferences.",
+    });
+  }
+
+  const settings = await getExtentionSettings();
+  const res = await request<{ success: true; item: PendingItem }>(`${base}/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    // empty list clears the queued tags
+    body: JSON.stringify({ tags }),
+    token: settings.apiToken,
+    timeoutMs: 20000,
+  });
+  if (!res.ok) {
+    return res;
+  }
+  log.debug("Pending tags updated", { id, tags });
+  return createOk(res.data.item);
+}
+
+/** GET /api/pending — used for the endpoint test. */
+export async function testPending(pendingUrl: Url, token?: string) {
+  const data = await request<ApiPendingListResponse>(pendingUrl, {
+    token,
+    timeoutMs: 20000,
+  });
+  if (!data.ok) {
     return {
       ok: false,
-      text: `pending ✗ ${responseData.messages.toString()}`,
-    };
+      text: `pending ✗ ${data.messages.toString()}`,
+    } satisfies TestEndpointResponse;
   }
   return {
     ok: true,
-    text: `pending ✓ (${responseData.data.items.length} items)`,
-  };
-}
-
-let pendingPromise: Promise<Result<ApiCheckPendingResponse>> | null = null;
-export function refreshPending(): Promise<Result<ApiCheckPendingResponse>> {
-  log.debug("Periodic refresh alarm fired");
-
-  if (pendingPromise) return pendingPromise;
-
-  pendingPromise = (async () => {
-    const extentionSettings = await getExtentionSettings();
-    const endpoint = getEndpoint(extentionSettings);
-    const { pending: previousPending } = (await browser.storage.local.get({ pending: null })) as {
-      pending: PendingResponseInStorage;
-    };
-
-    if (!endpoint.pending) {
-      log.debug("Pending endpoint not configured");
-      await browser.storage.local.set({
-        pending: { items: [], total: 0, fetchedAt: Date.now(), error: null },
-      });
-      return createError({ logger: log, message: "Pending endpoint not configured" });
-    }
-    try {
-      log.debug("Refreshing pending list");
-      const done = log.time("pending refresh");
-      const data = await request<ApiCheckPendingResponse>(endpoint.pending, {
-        token: extentionSettings.apiToken,
-        timeoutMs: 20000,
-      });
-      if (data.ok === false) {
-        return data;
-      }
-
-      const pending = data.data;
-      done({
-        fetched: pending.items.length,
-        total: pending.total,
-        limit: extentionSettings.pendingLimit,
-      });
-      log.debug(
-        `Pending list refreshed: ${pending.items.length} item${pending.items.length === 1 ? "" : "s"}`,
-      );
-      await browser.storage.local.set({
-        pending: {
-          items: pending.items.slice(0, extentionSettings.pendingLimit),
-          total: pending.items.length,
-          fetchedAt: Date.now(),
-          error: null,
-        },
-      });
-      return data;
-    } catch (e) {
-      const errorMessage = isStandardError(e) ? e.message : String(e);
-      log.warn("Pending list refresh failed", errorMessage);
-      await browser.storage.local.set({
-        pending: {
-          items: previousPending?.items || [],
-          total: previousPending?.total || 0,
-          fetchedAt: previousPending?.fetchedAt || null,
-          error: errorMessage,
-        },
-      });
-      return createError({
-        logger: log,
-        message: errorMessage,
-        extra: e,
-      });
-    }
-  })().finally(() => {
-    pendingPromise = null;
-  });
-  return pendingPromise;
+    text: `pending ✓ (${data.data.total} item(s))`,
+  } satisfies TestEndpointResponse;
 }

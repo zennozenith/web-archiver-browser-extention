@@ -4,7 +4,7 @@ import { log as rootLog } from "./log.ts";
 import { Result } from "./error.ts";
 import { Configured, Endpoint } from "./settings.ts";
 import { ApiSuccessArchiveResponse, ArchiveStatus } from "@src/background/archive.ts";
-import { PendingResponseInStorage } from "@src/background/pending.ts";
+import { PendingItem, PendingResponseInStorage } from "@src/background/pending.ts";
 import { TestEndpointResponse } from "@src/background/reqwest.ts";
 import { ApiTag, ApiTagRef } from "@src/background/tags.ts";
 
@@ -25,6 +25,10 @@ export interface MessageMap {
   GET_TAGS: { payload: undefined; data: ApiTag[] };
   GET_ARCHIVE: { payload: { tabId: Int }; data: ArchiveStatus };
   GET_PENDING: { payload: undefined; data: PendingResponseInStorage };
+  SET_PENDING_TAGS: {
+    payload: { id: string; tags: string[] };
+    data: PendingItem;
+  };
   ARCHIVE_TAB: {
     payload: { tabId: Int; tags: string[] };
     data: {
@@ -34,9 +38,9 @@ export interface MessageMap {
   };
   SET_SITE_TAGS: { payload: { url: Url; tags: string[] }; data: ApiTagRef[] };
   REFRESH_PENDING: { payload: undefined; data: { ok: boolean } };
-  OPEN_AND_ARCHIVE: { payload: { url: Url }; data: void };
+  OPEN_AND_ARCHIVE: { payload: { url: Url; tags?: string[] }; data: void };
   ARCHIVE_FROM_PAGE: {
-    payload: undefined;
+    payload: { tags?: string[] };
     data: ArchiveStatus;
   };
 }

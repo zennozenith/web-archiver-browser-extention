@@ -10,7 +10,12 @@ import {
   patchHeaders,
   testArchiveStatus,
 } from "./archive";
-import { PendingResponseInStorage, refreshPending, testPending } from "./pending";
+import {
+  PendingResponseInStorage,
+  refreshPending,
+  testPending,
+  updatePendingTags,
+} from "./pending";
 import { bgRootlog as log, receiveForwardedLogsInBackground } from "@common/log";
 import { session_storage_delete, session_storage_get } from "@common/storage";
 import { isArchivable } from "@common/index";
@@ -258,6 +263,9 @@ registerHandlers({
     const t = await refreshPending();
     return createOk({ ok: t === null ? false : t.ok });
   },
+  SET_PENDING_TAGS: async ({ id, tags }) => {
+    return await updatePendingTags(id, tags);
+  },
   ARCHIVE_TAB: async ({ tabId, tags }) => {
     // `tags` is optional: when given, they are sent along with the archive request
     // (the server merges them into the site's existing tags, creating unknown ones).
@@ -277,11 +285,13 @@ registerHandlers({
     }
     return result;
   },
-  OPEN_AND_ARCHIVE: async ({ url }) => {
-    await openAndArchive(url);
+  OPEN_AND_ARCHIVE: async ({ url, tags }) => {
+    // Optional tags ride along on the opened-tab flag; pending-queue tags merge
+    // inside archiveTab regardless.
+    await openAndArchive(url, tags ?? []);
     return createOk(undefined);
   },
-  ARCHIVE_FROM_PAGE: async (_, sender) => {
+  ARCHIVE_FROM_PAGE: async ({ tags }, sender) => {
     if (sender.tab?.id === undefined) {
       return createError({
         logger: log,
@@ -289,7 +299,7 @@ registerHandlers({
       });
     }
 
-    const result = await archiveWithFeedback(sender.tab.id, { toast: false });
+    const result = await archiveWithFeedback(sender.tab.id, { toast: false, tags });
     if (result.ok === false) {
       return result;
     }
