@@ -124,6 +124,7 @@ Lint/format/typecheck in one shot: `vp check`.
 ## Related
 
 - Requires a compatible archive server providing the endpoints listed above (a mock server is referenced via `devenv.nix` under `mock-server/`).
+- Example server: [zennozenith/web-archiver-example-server](https://github.com/zennozenith/web-archiver-example-server) — a ready-to-run reference implementation of the endpoints above.
 
 ## License
 

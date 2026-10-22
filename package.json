@@ -4,6 +4,7 @@
   "version": "0.0.8-build.0",
   "private": true,
   "description": "Archive pages (HTML, screenshot, headers, metadata) to your own archive server.",
+  "license": "MIT OR Apache-2.0",
   "type": "module",
   "scripts": {
     "dev": "TARGET=chrome vp dev",
