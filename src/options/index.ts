@@ -121,12 +121,18 @@ function readForm(): ExtensionSettings {
       .map((v) => v.trim())
       .filter((v) => v.length > 0),
   );
-  const defaultTags = new Set(
-    inputDefaultTags.value
-      .split(",")
-      .map((v) => v.trim())
-      .filter((v) => v.length > 0),
-  );
+  const defaultTags = inputDefaultTags.value
+    .split(",")
+    .map((v) => v.trim())
+    .filter((v) => v.length > 0)
+    .map((v) => {
+      let s = v.split(":", 2);
+      return {
+        name: s[0],
+        color: s[1] ? s[1] : null,
+      };
+    });
+
   return {
     serverUrl: inputServerUrl.value,
     apiToken: inputApiToken.value,

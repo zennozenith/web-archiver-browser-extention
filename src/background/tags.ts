@@ -1,7 +1,7 @@
 import { createError, createOk, type Result } from "@common/error";
 import { log as rootLog } from "@common/log";
 import { request } from "./reqwest";
-import type { Url } from "@common/types";
+import type { Url, Option, Int64 } from "@common/types";
 import { getEndpoint, getExtentionSettings } from "@common/settings";
 
 /* Client for the server's tag API
@@ -15,13 +15,16 @@ import { getEndpoint, getExtentionSettings } from "@common/settings";
 
 const log = rootLog.child("tags");
 
-export interface ApiTagRef {
-  id: string;
+export interface IdLessTag {
   name: string;
+  color: Option<string>; // palette key, never a hex value
 }
 
-export interface ApiTag extends ApiTagRef {
-  usage: number;
+export interface ApiTag {
+  id: Int64;
+  created_at: Int64;
+  name: string;
+  color: Option<string>; // palette key, never a hex value
 }
 
 export interface ApiTagsListResponse {
@@ -32,12 +35,12 @@ export interface ApiTagsListResponse {
 export interface ApiSiteTagsResponse {
   success: true;
   url: Url;
-  tags: ApiTagRef[];
+  tags: Array<ApiTag>;
 }
 
 /** All tags known to the server, with usage counts (where used: suggestions/autocomplete). */
 export async function listTags({ timeoutMs = 20000 }: { timeoutMs?: number } = {}): Promise<
-  Result<ApiTag[]>
+  Result<Array<ApiTag>>
 > {
   const settings = await getExtentionSettings();
   const endpoint = getEndpoint(settings);
@@ -62,9 +65,9 @@ export async function listTags({ timeoutMs = 20000 }: { timeoutMs?: number } = {
 /** Replace the tag set of a website. Unknown tag names are created server-side. */
 export async function setSiteTags(
   url: Url,
-  tags: string[],
+  tags: Array<IdLessTag>,
   { timeoutMs = 20000 }: { timeoutMs?: number } = {},
-): Promise<Result<ApiTagRef[]>> {
+): Promise<Result<Array<ApiTag>>> {
   const settings = await getExtentionSettings();
   const endpoint = getEndpoint(settings);
   if (!endpoint.sitesTags) {
@@ -75,7 +78,7 @@ export async function setSiteTags(
     });
   }
 
-  const names = [...new Set(tags.map((t) => t.trim()).filter(Boolean))];
+  const names = [...new Set(tags.map((t) => t.name.trim()).filter(Boolean))];
   const res = await request<ApiSiteTagsResponse>(endpoint.sitesTags, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },

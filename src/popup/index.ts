@@ -1,13 +1,14 @@
 import browser from "webextension-polyfill";
 
 import { EventBus } from "@common/event-bus";
-import { formatTime, timeAgo } from "@common/time";
+import { formatTime, formatTimeFromSec, timeAgo, timeAgoFromSec } from "@common/time";
 import type { Url } from "@common/types";
 import { ArchiveOkStatus, ArchiveStatus } from "@src/background/archive";
 import { Configured } from "@common/settings";
 import { sendToBackground } from "@common/messaging";
 import { isArchivable } from "@common/index";
 import { log as rootLog } from "@common/log";
+import { IdLessTag } from "@src/background/tags";
 const log = rootLog.child("popup");
 
 interface UiEvents {
@@ -21,11 +22,11 @@ interface UiEvents {
   "render:archive:checking:error": { archiveStatus: Exclude<ArchiveStatus, ArchiveOkStatus> };
   "render:archive:checking:ok": { archiveStatus: ArchiveOkStatus };
   "render:tags": { archiveStatus: ArchiveOkStatus | null };
-  "tags:set": { url: Url; tags: string[] };
-  "tags:set:ok": { tags: { id: string; name: string }[] };
+  "tags:set": { url: Url; tags: Array<IdLessTag> };
+  "tags:set:ok": { tags: Array<IdLessTag> };
   "tags:set:error": { message: string };
   /* Seed a not-yet-archived site with the user's default tags (once per URL). */
-  "tags:seed:defaults": { url: Url; existing: string[] };
+  "tags:seed:defaults": { url: Url; existing: Array<IdLessTag> };
   "error:any": { message: string };
   "error:any:clear": void;
 }
@@ -90,6 +91,9 @@ const pendingErrorContainer = document.getElementById("pending-error-container")
 const pendingEmpty = document.getElementById("pending-empty") as HTMLDivElement;
 const pendingList = document.getElementById("pending-list") as HTMLUListElement;
 const pendingOverflow = document.getElementById("pending-overflow") as HTMLDivElement;
+const pendingItemTemplate = document.getElementById(
+  "template-pending-list-item",
+) as HTMLTemplateElement;
 
 let tab: browser.Tabs.Tab,
   configured: Configured,
@@ -97,7 +101,7 @@ let tab: browser.Tabs.Tab,
   shortcut = "";
 
 /* Site-wide tags for the current page's URL + global tag names for the (<datalist>) suggestions. */
-let siteTags: { id: string; name: string }[] = [];
+let siteTags: Array<IdLessTag> = [];
 let tagsUrl: Url | null = null;
 let knownTags: string[] = [];
 /* URLs whose default tags were already offered this popup session
@@ -147,7 +151,7 @@ function renderTagChips() {
     rm.title = `Remove tag "${t.name}" from this site`;
     rm.disabled = !tagsUrl || !configured.sitesTags;
     rm.addEventListener("click", () => {
-      const remaining = siteTags.filter((x) => x.id !== t.id).map((x) => x.name);
+      const remaining = siteTags.filter((x) => x.name !== t.name);
       uiBus.emit("tags:set", { url: tagsUrl as Url, tags: remaining });
     });
     chip.appendChild(rm);
@@ -177,20 +181,20 @@ async function addTagFromInput() {
   if (!value || !tagsUrl) return;
   await uiBus.emitAsync("tags:set", {
     url: tagsUrl,
-    tags: [...siteTags.map((t) => t.name), value],
+    tags: [...siteTags, { color: null, name: value }],
   });
 }
 
 /** Default tags from the settings that the site does not have yet (as provisional chips). */
-function missingDefaultTags(existing: { name: string }[] = []): { id: string; name: string }[] {
-  const have = new Set(existing.map((t) => t.name.toLowerCase()));
-  return Array.from(configured.defaultTags)
-    .filter((n) => {
-      const name = n.trim().slice(0, 64);
-      return name && !have.has(name.toLowerCase());
-    })
-    .map((name) => ({ id: name, name }));
-}
+// function missingDefaultTags(existing: { name: string }[] = []): Array<TagRef> {
+//   const have = new Set(existing.map((t) => t.name.toLowerCase()));
+//   return Array.from(configured.defaultTags)
+//     .filter((n) => {
+//       const name = n.trim().slice(0, 64);
+//       return name && !have.has(name.toLowerCase());
+//     })
+//     .map((name) => ({ name, color: null }));
+// }
 
 /* ------------------------------------------------------------------ */
 /* App event handlers                                                 */
@@ -258,8 +262,8 @@ appBus.on("pending:check", async () => {
 
   pendingHeading.textContent = `Pending(${pending.total})`;
 
-  pendingFetchedTime.textContent = timeAgo(pending.fetchedAt);
-  pendingFetchedTime.title = formatTime(pending.fetchedAt);
+  pendingFetchedTime.textContent = timeAgoFromSec(pending.fetched_at);
+  pendingFetchedTime.title = formatTimeFromSec(pending.fetched_at);
   pendingFetchedTime.classList.remove("hidden");
 
   pendingUnconfigured.classList.toggle("hidden", configured.pending);
@@ -284,39 +288,36 @@ appBus.on("pending:check", async () => {
 
   // Pending Items List
   pendingList.innerHTML = "";
+  pendingList.innerHTML = "";
   if (pending.items.length) {
-    pending.items.forEach((it: any) => {
+    pending.items.forEach((it) => {
+      // --- Compute label (same logic as before) ---
       let label = it.title;
       try {
         const u = new URL(it.url);
         label = label || u.hostname + u.pathname;
       } catch {}
-      const li = document.createElement("li");
-      const growDiv = document.createElement("div");
-      growDiv.className = "grow";
-      const titleDiv = document.createElement("div");
-      titleDiv.className = "title";
+
+      // --- Clone template ---
+      const clone = pendingItemTemplate.content.cloneNode(true) as DocumentFragment;
+
+      const titleDiv = clone.querySelector(".title") as HTMLDivElement;
+      const urlDiv = clone.querySelector(".url") as HTMLDivElement;
+      const tagsDiv = clone.querySelector(".small.muted") as HTMLDivElement;
+      const tagBtn = clone.querySelector(".tags-btn") as HTMLButtonElement;
+      const actionBtn = clone.querySelector(".archive-btn") as HTMLButtonElement;
+
+      // --- Fill text content ---
       titleDiv.title = it.title || it.url;
       titleDiv.textContent = label;
-      growDiv.appendChild(titleDiv);
-      const urlDiv = document.createElement("div");
-      urlDiv.className = "url";
-      urlDiv.title = it.url;
-      urlDiv.textContent = it.url + (it.addedAt ? ` · ${timeAgo(it.addedAt)}` : "");
-      growDiv.appendChild(urlDiv);
-      // Tags queued for this URL (attached to the site on first archive).
-      const tags = (it.tags ?? []) as string[];
-      const tagsDiv = document.createElement("div");
-      tagsDiv.className = "small muted";
-      tagsDiv.textContent = tags.length ? `Tags: ${tags.join(", ")}` : "No tags";
-      growDiv.appendChild(tagsDiv);
-      li.appendChild(growDiv);
 
-      // Tag editor
-      const tagBtn = document.createElement("button");
-      tagBtn.className = "sm";
-      tagBtn.title = "Edit tags for this queued page";
-      tagBtn.textContent = "Tags";
+      urlDiv.title = it.url;
+      urlDiv.textContent = it.url + (it.created_at ? ` · ${timeAgoFromSec(it.created_at)}` : "");
+
+      const tags = it.tags.map((v) => v.name) ?? [];
+      tagsDiv.textContent = tags.length ? `Tags: ${tags.join(", ")}` : "No tags";
+
+      // --- Attach listeners ---
       tagBtn.addEventListener("click", async () => {
         const raw = prompt("Tags for this page (comma separated)", tags.join(", ")) ?? "";
         const next = raw
@@ -332,19 +333,15 @@ appBus.on("pending:check", async () => {
         await sendToBackground("REFRESH_PENDING");
         appBus.emit("pending:check");
       });
-      li.appendChild(tagBtn);
 
-      const actionBtn = document.createElement("button");
-      actionBtn.className = "sm";
-      actionBtn.title = "Open in a new tab and archive";
-      actionBtn.textContent = "Archive";
       actionBtn.addEventListener("click", async () => {
         log.debug("Pending list archive requested", { url: it.url });
         await sendToBackground("OPEN_AND_ARCHIVE", { url: it.url });
         window.close();
       });
-      li.appendChild(actionBtn);
-      pendingList.appendChild(li);
+
+      // --- Insert ---
+      pendingList.appendChild(clone);
     });
   }
 
@@ -383,7 +380,7 @@ appBus.on("archive", async () => {
   log.info("Archiving current page", { url: tab.url });
   const archiveResult = await sendToBackground("ARCHIVE_TAB", {
     tabId: tab.id,
-    tags: siteTags.map((t) => t.name),
+    tags: siteTags,
   });
 
   if (archiveResult.ok === false) {
@@ -430,7 +427,7 @@ appBus.on("archive:check", async () => {
   if (archiveStatus.state === "ok" && !archiveStatus.archived) {
     uiBus.emit("tags:seed:defaults", {
       url: archiveStatus.url,
-      existing: (archiveStatus.tags ?? []).map((t) => t.name),
+      existing: archiveStatus.tags ?? [],
     });
   }
 
@@ -599,7 +596,7 @@ uiBus.on("render:tags", ({ archiveStatus }) => {
     // provisional chips until they have been persisted.
     siteTags = (archiveStatus.tags ?? []).length
       ? (archiveStatus.tags ?? [])
-      : missingDefaultTags();
+      : Array.from(configured.defaultTags);
   } else {
     siteTags = [];
     tagsUrl = null;
@@ -613,13 +610,13 @@ uiBus.on("render:tags", ({ archiveStatus }) => {
 
 /* Persist default tags on a not-yet-archived site (once per URL per popup session). */
 uiBus.on("tags:seed:defaults", async ({ url, existing }) => {
-  const defaults = missingDefaultTags(existing.map((name) => ({ id: "", name })));
+  const defaults = Array.from(configured.defaultTags);
   if (!configured.sitesTags || !defaults.length || defaultsSeeded.has(url)) return;
   defaultsSeeded.add(url);
 
   await uiBus.emitAsync("tags:set", {
     url,
-    tags: [...existing, ...defaults.map((d) => d.name)],
+    tags: [...existing, ...defaults],
   });
 });
 

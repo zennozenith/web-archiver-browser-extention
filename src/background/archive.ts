@@ -4,11 +4,11 @@ import browser from "webextension-polyfill";
 import { createError, createOk, isStandardError, type Result } from "@common/error";
 import { bgRootlog } from "@common/log";
 import { request, TestEndpointResponse } from "./reqwest";
-import type { Int, ISODateTime, Url, Uuid } from "@common/types";
+import type { Int, Int64, ISODateTime, Url, Uuid } from "@common/types";
 import { session_storage_delete, session_storage_get, session_storage_set } from "@common/storage";
 import { getEndpoint, getExtentionSettings } from "@common/settings";
 import { isArchivable, normalizeUrl, sha256 } from "@common/index";
-import type { ApiTagRef } from "./tags";
+import type { ApiTag, IdLessTag } from "./tags";
 import { Screenshot, takeScreenshot } from "./screenshot";
 import { injectBanner } from "./browser-scripting";
 import { updateBadge } from "./badge";
@@ -44,7 +44,7 @@ export interface ApiSuccessArchiveResponse {
 export interface ApiArchiveVersionsResponse {
   archived: boolean;
   count: number;
-  tags: ApiTagRef[];
+  tags: Array<ApiTag>;
   versions: {
     id: string;
     archivedAt: ISODateTime;
@@ -78,21 +78,22 @@ const inflight = new Map<`${Int}|${Url}`, Promise<Result<ArchiveStatus>>>();
 const sleep = (ms: Int) => new Promise((resolve) => setTimeout(resolve, ms));
 const headerMemory = new Map<Int, Partial<HeadersDetails>>();
 
-/** Merge tag name lists into one, deduped case-insensitively, order preserved. */
-function mergeTagNames(...lists: (string[] | undefined)[]): string[] {
-  const names: string[] = [];
-  const seen = new Set<string>();
+export function mergeTags(...lists: Array<ApiTag>[]): Array<ApiTag> {
+  const byId = new Map<Int64, ApiTag>();
   for (const list of lists) {
-    for (const raw of list ?? []) {
-      const name = String(raw ?? "")
-        .trim()
-        .slice(0, 64);
-      if (!name || seen.has(name.toLowerCase())) continue;
-      seen.add(name.toLowerCase());
-      names.push(name);
+    for (const tag of list) {
+      if (!byId.has(tag.id)) byId.set(tag.id, tag);
     }
   }
-  return names;
+  return [...byId.values()];
+}
+export function mergeTagNames(...lists: Array<IdLessTag>[]): IdLessTag[] {
+  const byName = new Map<string, IdLessTag>();
+  for (const list of lists) for (const tag of list) byName.set(tag.name, tag);
+  return [...byName.values()];
+}
+export function mergeTagNamesNames(...lists: Array<IdLessTag>[]): string[] {
+  return [...new Set(lists.flat().map((t) => t.name))];
 }
 
 export function deleteHeaderMemory(tabId: Int) {
@@ -157,8 +158,8 @@ function applyStatusBadge(tabId: Int, archiveStatus: ArchiveStatus | null): Prom
       text: "",
       title:
         archiveStatus?.state === "unconfigured"
-          ? "URL Archiver — server not configured"
-          : "URL Archiver",
+          ? "Web Archiver — server not configured"
+          : "Web Archiver",
     });
   }
 
@@ -174,7 +175,7 @@ function applyStatusBadge(tabId: Int, archiveStatus: ArchiveStatus | null): Prom
   if (archiveStatus.state === "ok" && archiveStatus.archived) {
     const n = archiveStatus.count || archiveStatus.versions?.length || 0;
     const when = archiveStatus.versions?.[0]?.archivedAt ?? archiveStatus.lastArchivedAt;
-    const tagNames = mergeTagNames(archiveStatus.tags?.map((t) => t.name));
+    const tagNames = mergeTagNamesNames(archiveStatus.tags);
     return updateBadge({
       tabId,
       text: n ? (n > 99 ? "99+" : String(n)) : "✓",
@@ -189,13 +190,13 @@ function applyStatusBadge(tabId: Int, archiveStatus: ArchiveStatus | null): Prom
   return updateBadge({
     tabId,
     text: "",
-    title: "URL Archiver — not archived yet",
+    title: "Web Archiver — not archived yet",
   });
 }
 
 async function archiveTab(
   tabId: Int,
-  { tags }: { tags?: string[] } = {},
+  { tags }: { tags?: Array<IdLessTag> } = {},
 ): Promise<
   Result<{
     response: ApiSuccessArchiveResponse;
@@ -240,7 +241,7 @@ async function archiveTab(
     // Tag names are deduped case-insensitively; the server additionally merges
     // any tags queued with this URL in the pending queue, so nothing needs to
     // be attached client-side.
-    const allTags = mergeTagNames(tags);
+    const allTags = mergeTagNames(tags ?? []);
 
     log.info("Archiving page", { tabId, url, title: tab.title });
 
@@ -405,7 +406,7 @@ async function archiveTab(
 
 export async function archiveWithFeedback(
   tabId: Int,
-  { toast, tags }: { toast: boolean; tags?: string[] },
+  { toast, tags }: { toast: boolean; tags?: Array<IdLessTag> },
 ): Promise<
   Result<{
     response: ApiSuccessArchiveResponse;
@@ -594,7 +595,7 @@ export async function handleOpened(tabId: Int) {
   const opened = (await session_storage_get(`open:${tabId}`)) as {
     url: Url;
     at: number;
-    tags?: string[];
+    tags?: Array<IdLessTag>;
   };
   await session_storage_delete(`open:${tabId}`);
   const s = await getExtentionSettings();
@@ -613,10 +614,9 @@ export async function handleOpened(tabId: Int) {
   } else {
     // Prompt mode: offer a tag chip row (site's current/default tags, preselected)
     // before confirming; chosen tags are sent with ARCHIVE_FROM_PAGE.
-    const defaults = mergeTagNames(Array.from(s.defaultTags), opened?.tags);
+    const defaults = mergeTagNames(Array.from(s.defaultTags), opened?.tags ?? []);
     const status = await getArchiveStatus(tabId);
-    const siteTags =
-      status.ok === true && status.data.state === "ok" ? status.data.tags.map((t) => t.name) : [];
+    const siteTags = status.ok === true && status.data.state === "ok" ? status.data.tags : [];
     injectBanner(tabId, {
       kind: "",
       mode: "prompt",

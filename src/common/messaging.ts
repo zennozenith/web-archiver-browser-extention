@@ -1,12 +1,12 @@
 import browser from "webextension-polyfill";
-import type { Int, Url } from "./types.ts";
+import type { Int, Int64, Url } from "./types.ts";
 import { log as rootLog } from "./log.ts";
 import { Result } from "./error.ts";
 import { Configured, Endpoint } from "./settings.ts";
 import { ApiSuccessArchiveResponse, ArchiveStatus } from "@src/background/archive.ts";
-import { PendingItem, PendingResponseInStorage } from "@src/background/pending.ts";
+import { PendingDto, PendingInStorage } from "@src/background/pending.ts";
 import { TestEndpointResponse } from "@src/background/reqwest.ts";
-import { ApiTag, ApiTagRef } from "@src/background/tags.ts";
+import { ApiTag, IdLessTag } from "@src/background/tags.ts";
 
 const log = rootLog.child("messaging");
 
@@ -24,23 +24,23 @@ export interface MessageMap {
   };
   GET_TAGS: { payload: undefined; data: ApiTag[] };
   GET_ARCHIVE: { payload: { tabId: Int }; data: ArchiveStatus };
-  GET_PENDING: { payload: undefined; data: PendingResponseInStorage };
+  GET_PENDING: { payload: undefined; data: PendingInStorage };
   SET_PENDING_TAGS: {
-    payload: { id: string; tags: string[] };
-    data: PendingItem;
+    payload: { id: Int64; tags: string[] };
+    data: PendingDto;
   };
   ARCHIVE_TAB: {
-    payload: { tabId: Int; tags: string[] };
+    payload: { tabId: Int; tags: Array<IdLessTag> };
     data: {
       response: ApiSuccessArchiveResponse;
       warnings: string[];
     };
   };
-  SET_SITE_TAGS: { payload: { url: Url; tags: string[] }; data: ApiTagRef[] };
+  SET_SITE_TAGS: { payload: { url: Url; tags: Array<IdLessTag> }; data: Array<IdLessTag> };
   REFRESH_PENDING: { payload: undefined; data: { ok: boolean } };
   OPEN_AND_ARCHIVE: { payload: { url: Url; tags?: string[] }; data: void };
   ARCHIVE_FROM_PAGE: {
-    payload: { tags?: string[] };
+    payload: { tags: Array<IdLessTag> };
     data: ArchiveStatus;
   };
 }

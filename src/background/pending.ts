@@ -2,10 +2,12 @@ import browser from "webextension-polyfill";
 
 import { createError, createOk, type Result } from "@common/error";
 import { bgRootlog as log } from "@common/log";
-import type { Url } from "@common/types";
+import type { Url, Option, Int64, Page } from "@common/types";
 import { getEndpoint, getExtentionSettings } from "@common/settings";
 import { request } from "./reqwest";
 import type { TestEndpointResponse } from "./reqwest";
+import { ApiTag } from "./tags";
+import { nowUnixEpochSeconds, UnixEpochSeconds } from "@common/time";
 
 /* Pending queue client.
  *
@@ -16,31 +18,25 @@ import type { TestEndpointResponse } from "./reqwest";
  * The archive handler merges the queued tags into the site on first archive and
  * removes the pending row, so nothing needs to be kept in extension storage. */
 
-export interface PendingItem {
-  id: string;
+export type PendingStatus = "queued" | "in_progress" | "failed";
+
+export interface PendingDto {
+  id: Int64;
   url: Url;
-  title: string;
-  addedAt: string;
+  title: Option<string>;
+  status: PendingStatus;
+  attempts: Int64;
+  last_error: Option<string>;
+  created_at: UnixEpochSeconds;
   /* tag names queued with this URL (server-authoritative) */
-  tags?: string[];
+  tags: Array<ApiTag>;
 }
 
-export interface PendingResponseInStorage {
-  fetchedAt: number;
+export interface PendingInStorage {
+  fetched_at: UnixEpochSeconds;
   total: number;
-  items: PendingItem[];
+  items: PendingDto[];
   error?: string;
-}
-
-interface ApiPendingListResponse {
-  items: PendingItem[];
-  total: number;
-}
-
-async function pendingEndpoint(): Promise<string | null> {
-  const settings = await getExtentionSettings();
-  const endpoint = getEndpoint(settings);
-  return endpoint.pending ? endpoint.pending.split("?")[0].replace(/\/$/, "") : null;
 }
 
 /** Fetch the server's pending queue and cache the result in
@@ -53,30 +49,30 @@ export async function refreshPending(): Promise<{ ok: boolean } | null> {
     return null;
   }
 
-  const res = await request<ApiPendingListResponse>(endpoint.pending, {
+  const res = await request<Page<PendingDto>>(endpoint.pending, {
     token: settings.apiToken,
     timeoutMs: 20000,
   });
 
-  let previous: PendingResponseInStorage | null = null;
+  let previous: PendingInStorage | null = null;
   try {
     const { pending } = (await browser.storage.local.get({ pending: null })) as {
-      pending: PendingResponseInStorage | null;
+      pending: PendingInStorage | null;
     };
     previous = pending;
   } catch {}
 
-  let data: PendingResponseInStorage;
+  let data: PendingInStorage;
   if (res.ok) {
     data = {
-      fetchedAt: Date.now(),
-      total: res.data.total,
+      fetched_at: nowUnixEpochSeconds(),
+      total: res.data.items.length,
       items: res.data.items,
     };
   } else {
     // Keep the last good list, surface the error to the popup.
     data = {
-      fetchedAt: Date.now(),
+      fetched_at: nowUnixEpochSeconds(),
       total: previous?.total ?? 0,
       items: previous?.items ?? [],
       error: res.messages.toString(),
@@ -91,9 +87,12 @@ export async function refreshPending(): Promise<{ ok: boolean } | null> {
 /** Add an URL (with optional queued tags) to the server's pending queue. */
 export async function addPending(
   url: Url,
-  { title = "", tags = [] }: { title?: string; tags?: string[] } = {},
-): Promise<Result<PendingItem>> {
-  const base = await pendingEndpoint();
+  { title, tags }: { title?: string; tags?: string[] } = {},
+): Promise<Result<PendingDto>> {
+  const settings = await getExtentionSettings();
+  const endpoint = getEndpoint(settings);
+  const base = endpoint.pending;
+
   if (!base) {
     log.debug("Pending URL not configured, cannot add");
     return createError({
@@ -102,23 +101,29 @@ export async function addPending(
     });
   }
 
-  const settings = await getExtentionSettings();
-  const res = await request<{ success: true; item: PendingItem }>(base, {
+  const res = await request<PendingDto>(base, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url, title: title.trim(), tags }),
+    body: JSON.stringify({ url, title, tags }),
     token: settings.apiToken,
     timeoutMs: 20000,
   });
   if (!res.ok) {
     return res;
   }
-  return createOk({ ...res.data.item, tags: res.data.item.tags ?? tags });
+  log.debug("Pending tags created", { id: res.data.id, url, tags });
+  return createOk(res.data);
 }
 
 /** PATCH /api/pending/:id — replace the tags queued with a URL (server-side). */
-export async function updatePendingTags(id: string, tags: string[]): Promise<Result<PendingItem>> {
-  const base = await pendingEndpoint();
+export async function updatePendingTags(
+  id: Int64,
+  { title, status, tags }: { title?: string; status?: PendingStatus; tags?: string[] } = {},
+): Promise<Result<PendingDto>> {
+  const settings = await getExtentionSettings();
+  const endpoint = getEndpoint(settings);
+  const base = endpoint.pending;
+
   if (!base) {
     log.debug("Pending URL not configured, cannot edit");
     return createError({
@@ -127,25 +132,24 @@ export async function updatePendingTags(id: string, tags: string[]): Promise<Res
     });
   }
 
-  const settings = await getExtentionSettings();
-  const res = await request<{ success: true; item: PendingItem }>(`${base}/${id}`, {
+  const res = await request<PendingDto>(`${base}/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     // empty list clears the queued tags
-    body: JSON.stringify({ tags }),
+    body: JSON.stringify({ title, status, tags }),
     token: settings.apiToken,
     timeoutMs: 20000,
   });
   if (!res.ok) {
     return res;
   }
-  log.debug("Pending tags updated", { id, tags });
-  return createOk(res.data.item);
+  log.debug("Pending tags updated", { id, status, tags });
+  return createOk(res.data);
 }
 
 /** GET /api/pending — used for the endpoint test. */
 export async function testPending(pendingUrl: Url, token?: string) {
-  const data = await request<ApiPendingListResponse>(pendingUrl, {
+  const data = await request<Page<PendingDto>>(pendingUrl, {
     token,
     timeoutMs: 20000,
   });
@@ -157,6 +161,6 @@ export async function testPending(pendingUrl: Url, token?: string) {
   }
   return {
     ok: true,
-    text: `pending ✓ (${data.data.total} item(s))`,
+    text: `pending ✓ (${data.data.items.length} item(s))`,
   } satisfies TestEndpointResponse;
 }

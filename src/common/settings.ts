@@ -2,6 +2,7 @@ import type { Int, OverrideUrl, Url } from "./types";
 import type { LevelSetting } from "./logger";
 import { local_storage_get, local_storage_set } from "./storage";
 import { log as rootLog } from "./log.ts";
+import { IdLessTag } from "@src/background/tags.ts";
 
 const log = rootLog.child("settings");
 
@@ -30,7 +31,7 @@ export interface ExtensionSettings {
   showBadge: boolean;
   theme: "auto" | "light" | "dark";
   sensitiveHeaders: Set<string>;
-  defaultTags: Set<string>;
+  defaultTags: Array<IdLessTag>;
 }
 
 export interface Endpoint {
@@ -53,7 +54,7 @@ export interface Configured {
   pendingLimit: number;
   logLevel: LevelSetting;
   sensitiveHeaders: Set<string>;
-  defaultTags: Set<string>;
+  defaultTags: Array<IdLessTag>;
 }
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
@@ -81,7 +82,7 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   showBadge: true,
   theme: "auto",
   sensitiveHeaders: new Set(["cookie", "authorization", "proxy-authorization", "set-cookie"]),
-  defaultTags: new Set(["read-later"]),
+  defaultTags: [{ color: "default", name: "read-later" }],
 };
 
 export const EXTENSION_SETTINGS_SESSION_KEY = "extension_settings" as const;

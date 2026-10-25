@@ -10,12 +10,7 @@ import {
   patchHeaders,
   testArchiveStatus,
 } from "./archive";
-import {
-  PendingResponseInStorage,
-  refreshPending,
-  testPending,
-  updatePendingTags,
-} from "./pending";
+import { PendingInStorage, refreshPending, testPending, updatePendingTags } from "./pending";
 import { bgRootlog as log, receiveForwardedLogsInBackground } from "@common/log";
 import { session_storage_delete, session_storage_get } from "@common/storage";
 import { isArchivable } from "@common/index";
@@ -255,16 +250,17 @@ registerHandlers({
   },
   GET_PENDING: async () => {
     const { pending } = (await browser.storage.local.get({ pending: null })) as {
-      pending: PendingResponseInStorage;
+      pending: PendingInStorage;
     };
-    return createOk<PendingResponseInStorage>(pending);
+    return createOk<PendingInStorage>(pending);
   },
   REFRESH_PENDING: async () => {
     const t = await refreshPending();
     return createOk({ ok: t === null ? false : t.ok });
   },
+  // TODO: rename update pending
   SET_PENDING_TAGS: async ({ id, tags }) => {
-    return await updatePendingTags(id, tags);
+    return await updatePendingTags(id, { tags });
   },
   ARCHIVE_TAB: async ({ tabId, tags }) => {
     // `tags` is optional: when given, they are sent along with the archive request

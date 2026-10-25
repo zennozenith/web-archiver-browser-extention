@@ -1,12 +1,13 @@
 import type { Result } from "@common/error";
 import { ArchiveStatus } from "../archive";
+import { IdLessTag } from "../tags";
 
 export interface BannerOpts {
   kind: "ok" | "err" | (string & {});
   text: string;
   mode: "prompt" | "toast" | (string & {});
   /* optional (prompt mode): tag names offered as a chip row before confirming */
-  tags?: string[];
+  tags?: Array<IdLessTag>;
 }
 
 export interface Page {
@@ -146,17 +147,17 @@ export function pageBanner(opts: BannerOpts) {
     if (!chipTags.length) return undefined;
     const row = document.createElement("div");
     row.className = "c";
-    for (const name of chipTags) {
+    for (const tag of chipTags) {
       const c = document.createElement("button");
-      c.textContent = name;
-      c.className = chosen.has(name) ? "on" : "";
+      c.textContent = tag.name;
+      c.className = chosen.has(tag) ? "on" : "";
       c.title = "Attach tag";
       c.onclick = () => {
-        if (chosen.has(name)) {
-          chosen.delete(name);
+        if (chosen.has(tag)) {
+          chosen.delete(tag);
           c.className = "";
         } else {
-          chosen.add(name);
+          chosen.add(tag);
           c.className = "on";
         }
       };
