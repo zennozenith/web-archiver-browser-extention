@@ -1,7 +1,7 @@
 {
   "name": "web-archiver-extension",
   "displayName": "Web Archiver",
-  "version": "0.2.0-build.0",
+  "version": "0.2.0-build.1",
   "private": true,
   "description": "Archive pages (HTML, screenshot, headers, metadata) to your own archive server.",
   "license": "MIT OR Apache-2.0",

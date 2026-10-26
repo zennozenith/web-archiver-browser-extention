@@ -4,15 +4,18 @@ import browser from "webextension-polyfill";
 import { createError, createOk, isStandardError, type Result } from "@common/error";
 import { bgRootlog } from "@common/log";
 import { request, TestEndpointResponse } from "./reqwest";
-import { Int, Int64, Url, Option, Vec } from "@common/types";
+import { Int, Int64, UrlStr, Option, Vec } from "@common/types";
 import { session_storage_delete, session_storage_get, session_storage_set } from "@common/storage";
-import { getEndpoint, getExtentionSettings } from "@common/settings";
-import { isArchivable, normalizeUrl, sha256 } from "@common/index";
-import type { ApiTag, IdLessTag } from "./tags";
+import {
+  errorIfServerUnconfigured,
+  getExtensionSettings,
+  isServerConfigured,
+} from "@common/settings";
+import { canonicalizeUrl, createUrl, extractTabUrl, isArchivable, sha256 } from "@common/index";
+import type { TagDto, IdLessTag } from "./tags";
 import { Screenshot, takeScreenshot } from "./screenshot";
 import { injectBanner } from "./browser-scripting";
 import { updateBadge } from "./badge";
-import { formatTime } from "@common/time";
 import { collectPage, type Page } from "./content-scripts";
 
 const log = bgRootlog.child("archive");
@@ -38,8 +41,8 @@ export interface Dedup {
 }
 
 export interface ApiArchiveResponse {
-  capture_id: Int64;
-  page_id: Int64;
+  captureId: Int64;
+  pageId: Int64;
   version: Int64;
   deduplicated: Dedup;
 }
@@ -49,47 +52,52 @@ export interface ApiPageDto {
   url: string;
   host: string;
   title: Option<string>;
-  capture_count: Int64;
-  last_captured_at: Option<Int64>;
-  tags: Vec<ApiTag>;
+  captureCount: Int64;
+  lastCapturedAt: Option<Int64>;
+  tags: Vec<TagDto>;
 }
 
 export interface ApiCaptureSummary {
   id: Int64;
   version: Int64;
-  captured_at: Int64;
+  capturedAt: Int64;
   title: Option<string>;
-  status_code: Option<string>;
-  content_hash: Option<string>; // hex
-  has_screenshot: boolean;
+  statusCode: Option<string>;
+  contentHash: Option<string>; // hex
+  hasScreenshot: boolean;
 }
 
 export interface ApiPageDetail extends ApiPageDto {
-  latest_capture: ApiCaptureSummary;
+  latestCapture: ApiCaptureSummary;
 }
 
-interface ArchiveErrorStatus {
-  state: "error" | "unsupported" | "unconfigured";
-  url: Url;
-  error: string;
-  checkedAt: number;
-}
+// interface ArchiveErrorStatus {
+//   state: "error" | "unsupported" | "unconfigured";
+//   url: UrlStr;
+//   error: string;
+//   checkedAt: number;
+// }
 
-export interface ArchiveOkStatus extends ApiPageDetail {
-  state: "ok";
-  url: Url;
-  checked_at: number;
-}
+// export interface ArchiveOkStatus extends ApiPageDetail {
+//   state: "ok";
+//   checkedAt: number;
+// }
 
-export type ArchiveStatus = ArchiveOkStatus | ArchiveErrorStatus;
+// export type ArchiveStatus = ArchiveOkStatus | ArchiveErrorStatus;
+
+// export interface ArchiveOkStatus extends ApiPageDetail {
+//   state: "ok";
+//   checkedAt: number;
+// }
 
 const busyTabs = new Set<Int>();
-const inflight = new Map<`${Int}|${Url}`, Promise<Result<ArchiveStatus>>>();
+const inflight = new Map<string, Promise<Result<ApiPageDetail | null>>>();
 const sleep = (ms: Int) => new Promise((resolve) => setTimeout(resolve, ms));
 const headerMemory = new Map<Int, Partial<HeadersDetails>>();
 
-export function mergeTags(...lists: Vec<ApiTag>[]): Vec<ApiTag> {
-  const byId = new Map<Int64, ApiTag>();
+// TODO: todo are merge function required
+export function mergeTags(...lists: Vec<TagDto>[]): Vec<TagDto> {
+  const byId = new Map<Int64, TagDto>();
   for (const list of lists) {
     for (const tag of list) {
       if (!byId.has(tag.id)) byId.set(tag.id, tag);
@@ -118,7 +126,7 @@ async function headersToObject(
   headerList: WebRequest.HttpHeaders | null | undefined,
   keepSensitive: boolean = false,
 ): Promise<Record<string, string>> {
-  const extensionSettings = await getExtentionSettings();
+  const extensionSettings = await getExtensionSettings();
 
   const headersMap: Record<string, string> = {};
 
@@ -150,60 +158,6 @@ export function patchHeaders(tabId: Int, requestId: string, patch: Partial<Heade
   session_storage_set(`hdr:${tabId}`, next).catch(() => {});
 }
 
-function buildArchiveStatusUrl(checkUrl: Url, pageUrl: Url) {
-  if (checkUrl.includes("{url}")) return checkUrl.replace("{url}", encodeURIComponent(pageUrl));
-  const url = new URL(checkUrl);
-  url.searchParams.set("url", pageUrl);
-  return url.toString();
-}
-
-function applyStatusBadge(tabId: Int, archiveStatus: ArchiveStatus | null): Promise<void> {
-  if (
-    !archiveStatus ||
-    archiveStatus.state === "unsupported" ||
-    archiveStatus.state === "unconfigured"
-  ) {
-    return updateBadge({
-      tabId,
-      text: "",
-      title:
-        archiveStatus?.state === "unconfigured"
-          ? "Web Archiver — server not configured"
-          : "Web Archiver",
-    });
-  }
-
-  if (archiveStatus.state === "error") {
-    return updateBadge({
-      tabId,
-      text: "!",
-      color: "#d93025",
-      title: `ArchiveStatus check failed: ${archiveStatus.error}`,
-    });
-  }
-
-  if (archiveStatus.state === "ok") {
-    const n = archiveStatus.page_detail.capture_count;
-    const when = archiveStatus.page_detail.last_captured_at;
-    const tagNames = archiveStatus.page_detail.tags;
-    return updateBadge({
-      tabId,
-      text: n ? (n > 99 ? "99+" : String(n)) : "✓",
-      color: "#188038",
-      title:
-        `Archived${n ? ` — ${n} version${n === 1 ? "" : "s"}` : ""}` +
-        (tagNames.length ? `\nTags: ${tagNames.join(", ")}` : "") +
-        (when ? `\nLast: ${formatTime(when)}` : ""),
-    });
-  }
-
-  return updateBadge({
-    tabId,
-    text: "",
-    title: "Web Archiver — not archived yet",
-  });
-}
-
 async function archiveTab(
   tabId: Int,
   { tags }: { tags?: Vec<IdLessTag> } = {},
@@ -227,13 +181,12 @@ async function archiveTab(
   try {
     await session_storage_delete(`archiveError:${tabId}`);
 
-    const extensionSettings = await getExtentionSettings();
-    const endpoint = getEndpoint(extensionSettings);
-    if (!endpoint.archive) {
-      log.debug("Server/Archive URL not configured");
+    const extensionSettings = await getExtensionSettings();
+    if (!isServerConfigured(extensionSettings)) {
+      log.debug("Server is not configured");
       return createError({
         logger: log,
-        message: "Server/Archive URL is not configured. Open the extension preferences.",
+        message: "Server is not configured. Open the extension preferences.",
       });
     }
 
@@ -247,11 +200,6 @@ async function archiveTab(
         extra: { url: tab.url },
       });
     }
-
-    // Tag names are deduped case-insensitively; the server additionally merges
-    // any tags queued with this URL in the pending queue, so nothing needs to
-    // be attached client-side.
-    const allTags = mergeTagNames(tags ?? []);
 
     log.info("Archiving page", { tabId, url, title: tab.title });
 
@@ -301,7 +249,7 @@ async function archiveTab(
       warnings.push(
         "No request headers recorded for this tab (page was loaded before the extension started)",
       );
-    } else if (normalizeUrl(headers.url as Url) !== normalizeUrl(page.url)) {
+    } else if (canonicalizeUrl(headers.url as UrlStr) !== canonicalizeUrl(page.url)) {
       log.warn(
         "Recorded headers belong to a different URL (page navigated via script/history browser)",
       );
@@ -365,8 +313,8 @@ async function archiveTab(
     formData.append("url", url);
     formData.append("title", title);
 
-    if (allTags.length) {
-      formData.append("tags", JSON.stringify(allTags.map((v) => v.name)));
+    if (tags?.length) {
+      formData.append("tags", JSON.stringify(tags.map((v) => v.name)));
     }
 
     if (maybeScreenshot?.ok) {
@@ -386,12 +334,15 @@ async function archiveTab(
       screenshotBytes: maybeScreenshot?.ok ? maybeScreenshot.data.blob.size : null,
     });
 
-    const result = await request<ApiArchiveResponse>(endpoint.archive, {
-      method: "POST",
-      body: formData,
-      token: extensionSettings.apiToken,
-      timeoutMs: (Number(extensionSettings.requestTimeoutSec) || 120) * 1000,
-    });
+    const result = await request<ApiArchiveResponse>(
+      createUrl(extensionSettings.serverUrl, "/api/archive"),
+      {
+        method: "POST",
+        body: formData,
+        token: extensionSettings.token,
+        timeoutMs: (Number(extensionSettings.requestTimeoutSec) || 120) * 1000,
+      },
+    );
 
     if (result.ok === false) {
       return result;
@@ -469,17 +420,117 @@ export async function archiveWithFeedback(
   }
 }
 
+/**
+ * Returns Result<null> if no page found for given lookup url
+ */
+export async function pageLookup(tabId: Int): Promise<Result<ApiPageDetail | null>> {
+  const { serverUrl, token } = await getExtensionSettings();
+  const serverUnconfigured = errorIfServerUnconfigured({ serverUrl }, log);
+  if (serverUnconfigured !== null) return serverUnconfigured;
+
+  const urlResult = await extractTabUrl(tabId, log);
+  if (!urlResult.ok) return urlResult;
+  let urlToLookUp = urlResult.data;
+
+  const url = canonicalizeUrl(urlToLookUp);
+  const urlShaHash = await sha256(url);
+
+  const key = urlShaHash;
+  if (inflight.has(key)) {
+    logArchiveStatus.debug("Joining in-flight status check", { url: url });
+    const status = await inflight.get(key)!;
+    return status;
+  }
+
+  const inflightStatusPromise: Promise<Result<ApiPageDetail | null>> = (async () => {
+    logArchiveStatus.debug("Checking archive status", { url: url });
+
+    const done = logArchiveStatus.time("status check");
+
+    const reqUrl = createUrl(serverUrl, "/api/pages/lookup");
+    reqUrl.searchParams.set("url", url);
+
+    // TODO: check what is returned if page not found
+    let pageResult = await request<ApiPageDetail | null>(reqUrl, {
+      token,
+      timeoutMs: 20000,
+    });
+    done();
+
+    logArchiveStatus[pageResult.ok ? "debug" : "warn"](pageResult);
+
+    await session_storage_set(`status:${urlShaHash}`, pageResult);
+
+    return pageResult;
+  })().finally(() => inflight.delete(key));
+
+  inflight.set(key, inflightStatusPromise);
+  return inflightStatusPromise;
+}
+
+export async function openAndArchive(url: UrlStr, tags: string[] = []) {
+  const tab = await browser.tabs.create({ url, active: true });
+  logCapture.info("Opened new tab for direct archive", { url, tabId: tab.id });
+  await session_storage_set(`open:${tab.id}`, { url, at: Date.now(), tags });
+}
+
+export async function handleOpened(tabId: Int) {
+  const opened = (await session_storage_get(`open:${tabId}`)) as {
+    url: UrlStr;
+    at: number;
+    tags?: Vec<IdLessTag>;
+  };
+  await session_storage_delete(`open:${tabId}`);
+
+  const { serverUrl, directArchiveMode, directArchiveDelaySec, defaultTags } =
+    await getExtensionSettings();
+  const serverUnconfigured = errorIfServerUnconfigured({ serverUrl }, log);
+  if (serverUnconfigured !== null) return serverUnconfigured;
+  await getExtensionSettings();
+
+  await sleep(Math.max(0, Number(directArchiveDelaySec) || 0) * 1000);
+
+  logCapture.debug(`Direct-archive mode: ${directArchiveMode}`, { tabId });
+
+  if (directArchiveMode === "auto") {
+    // Per-URL pending tags are merged inside archiveTab automatically.
+    archiveWithFeedback(tabId, { toast: true, tags: opened?.tags ?? undefined });
+  } else {
+    // Prompt mode: offer a tag chip row (site's current/default tags, preselected)
+    // before confirming; chosen tags are sent with ARCHIVE_FROM_PAGE.
+    const defaults = mergeTagNames(Vec.from(defaultTags), opened?.tags ?? []);
+    const status = await pageLookup(tabId);
+    const siteTags = status.ok === true && status.data ? status.data.tags : [];
+    injectBanner(tabId, {
+      kind: "",
+      mode: "prompt",
+      text: "Archive this page?",
+      tags: mergeTagNames(siteTags, defaults),
+    });
+  }
+}
+
 export async function testPageStatus(
-  archiveUrl: Url,
+  serverUrl: UrlStr,
   {
     token,
     queryUrl = "https://example.com/",
   }: {
     token?: string;
-    queryUrl?: Url;
+    queryUrl?: UrlStr;
   } = {},
 ): Promise<TestEndpointResponse> {
-  const responseData = await request<ApiPageDetail>(buildArchiveStatusUrl(archiveUrl, queryUrl), {
+  const url = URL.parse(serverUrl);
+  if (!url) {
+    return {
+      ok: false,
+      text: `page check ✗ Cannot parse ${serverUrl} as URL`,
+    };
+  }
+
+  const reqUrl = createUrl(url, "/api/pages/lookup");
+  reqUrl.searchParams.set("url", queryUrl);
+  const responseData = await request<ApiPageDetail>(reqUrl, {
     token,
     timeoutMs: 20000,
   });
@@ -492,142 +543,6 @@ export async function testPageStatus(
   }
   return {
     ok: true,
-    text: `page check ✓ [for "${queryUrl}" ${responseData.data.capture_count} capture(s)]`,
+    text: `page check ✓ [for "${queryUrl}" ${responseData.data.captureCount} capture(s)]`,
   };
-}
-
-export async function getArchiveStatus(tabId: Int): Promise<Result<ArchiveStatus>> {
-  let tab: browser.Tabs.Tab;
-  try {
-    tab = await browser.tabs.get(tabId);
-  } catch (e) {
-    return createError({
-      logger: logArchiveStatus,
-      message: `Cannot check tab with id: ${tabId}`,
-      extra: e,
-    });
-  }
-
-  const _url = tab.url;
-
-  if (_url === undefined || !isArchivable(_url)) {
-    logArchiveStatus.debug("URL not archivable, clearing status", { tabId, url: _url });
-    await session_storage_delete(`status:${tabId}`);
-    applyStatusBadge(tabId, null);
-    return createOk({
-      state: "unsupported",
-      error: `URL not archivable: ${_url}`,
-      url: tab.url ?? "Url not present",
-      checkedAt: Date.now(),
-    });
-  }
-
-  const extentionSettings = await getExtentionSettings();
-  const endpoint = getEndpoint(extentionSettings);
-  const url = normalizeUrl(_url);
-
-  if (!endpoint.check) {
-    logArchiveStatus.debug("Check endpoint not configured", { tabId, url });
-    const archiveStatus: ArchiveStatus = {
-      state: "unconfigured",
-      url,
-      checkedAt: Date.now(),
-      error: "Check endpoint not configured",
-    };
-
-    await session_storage_set(`status:${tabId}`, archiveStatus);
-    applyStatusBadge(tabId, archiveStatus);
-    return createOk(archiveStatus);
-  }
-
-  const key = `${tabId}|${url}` as const;
-  if (inflight.has(key)) {
-    logArchiveStatus.debug("Joining in-flight status check", { tabId, url });
-    const status = await inflight.get(key)!;
-    return status;
-  }
-
-  const inflightStatusPromise: Promise<Result<ArchiveStatus>> = (async () => {
-    let archiveStatus: ArchiveStatus;
-    logArchiveStatus.debug("Checking archive status", { tabId, url });
-    const done = logArchiveStatus.time("status check");
-    try {
-      const data = await request<ApiPageDetail>(buildArchiveStatusUrl(endpoint.check, url), {
-        token: extentionSettings.apiToken,
-        timeoutMs: 20000,
-      });
-      if (data.ok === false) {
-        archiveStatus = {
-          state: "error",
-          url,
-          checkedAt: Date.now(),
-          error: data.messages.toString(),
-        };
-      } else {
-        archiveStatus = { state: "ok", url, checked_at: Date.now(), page_detail: data.data };
-      }
-      done(archiveStatus.state);
-    } catch (e) {
-      const errorMessage = isStandardError(e) ? e.message : String(e);
-      archiveStatus = {
-        state: "error",
-        url,
-        error: errorMessage,
-        checkedAt: Date.now(),
-      };
-    }
-
-    logArchiveStatus[archiveStatus.state === "error" ? "warn" : "debug"](
-      `Archive status: ${archiveStatus.state}`,
-      archiveStatus,
-    );
-    await session_storage_set("status:" + tabId, archiveStatus);
-    applyStatusBadge(tabId, archiveStatus);
-    return createOk(archiveStatus);
-  })().finally(() => inflight.delete(key));
-
-  inflight.set(key, inflightStatusPromise);
-  return inflightStatusPromise;
-}
-
-export async function openAndArchive(url: Url, tags: string[] = []) {
-  const tab = await browser.tabs.create({ url, active: true });
-  logCapture.info("Opened new tab for direct archive", { url, tabId: tab.id });
-  await session_storage_set(`open:${tab.id}`, { url, at: Date.now(), tags });
-}
-
-export async function handleOpened(tabId: Int) {
-  const opened = (await session_storage_get(`open:${tabId}`)) as {
-    url: Url;
-    at: number;
-    tags?: Vec<IdLessTag>;
-  };
-  await session_storage_delete(`open:${tabId}`);
-  const s = await getExtentionSettings();
-  await sleep(Math.max(0, Number(s.directArchiveDelaySec) || 0) * 1000);
-  try {
-    await browser.tabs.get(tabId);
-  } catch {
-    logCapture.debug("Direct-archive tab closed before archiving", { tabId });
-    return;
-  }
-  logCapture.debug(`Direct-archive mode: ${s.directArchiveMode}`, { tabId });
-
-  if (s.directArchiveMode === "auto") {
-    // Per-URL pending tags are merged inside archiveTab automatically.
-    archiveWithFeedback(tabId, { toast: true, tags: opened?.tags ?? undefined });
-  } else {
-    // Prompt mode: offer a tag chip row (site's current/default tags, preselected)
-    // before confirming; chosen tags are sent with ARCHIVE_FROM_PAGE.
-    const defaults = mergeTagNames(Vec.from(s.defaultTags), opened?.tags ?? []);
-    const status = await getArchiveStatus(tabId);
-    const siteTags =
-      status.ok === true && status.data.state === "ok" ? status.data.page_detail.tags : [];
-    injectBanner(tabId, {
-      kind: "",
-      mode: "prompt",
-      text: "Archive this page?",
-      tags: mergeTagNames(siteTags, defaults),
-    });
-  }
 }

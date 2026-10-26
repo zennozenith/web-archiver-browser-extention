@@ -51,19 +51,28 @@
     </div>
   </div>
 
-  <main id="app" class="hidden">
-    <!-- Notice Section: Permissions -->
-    <div id="notice-permission" class="notice hidden">
-      <div>
-        Site access hasn't been granted yet. It's needed to read pages and request headers.
+  <main id="app" class="">
+    <div id="notice">
+      <!-- Notice Section: Permissions -->
+      <div id="notice-permission" class="notice hidden">
+        <div>
+          Site access hasn't been granted yet. It's needed to read pages and request headers.
+        </div>
+        <button id="btn-grant-permission" type="button" class="sm">Grant access</button>
       </div>
-      <button id="btn-grant-permission" type="button" class="sm">Grant access</button>
-    </div>
 
-    <!-- Notice Section: No Server Configured -->
-    <div id="notice-no-server" class="notice hidden">
-      <div>No server configured yet.</div>
-      <button data-key="btn-open-options" type="button" class="sm">Open preferences</button>
+      <!-- Notice Section: No Server Configured -->
+      <div id="notice-no-server" class="notice hidden">
+        <div>No server configured yet.</div>
+        <button data-key="btn-open-options" type="button" class="sm">Open preferences</button>
+      </div>
+
+      <div id="notice-no-tab-id" class="notice hidden">
+        <div>
+          Tab has no tab id
+        </div>
+      </div>
+
     </div>
 
     <!-- Error Box: Archive Endpoint Not Configured -->
@@ -75,11 +84,11 @@
     <div id="error-any" class="error hidden hidden-box">Error Occured</div>
 
     <!-- Section Card: Current Page -->
-    <section class="card" id="card-current-section">
+    <section class="card" id="card-current-section ">
       <h2>Current page</h2>
 
       <!-- Unarchivable state container -->
-      <div id="current-unarchivable" class="muted hidden">
+      <div id="current-unarchivable" class="muted">
         This page can't be archived (only http/https pages).
       </div>
 
@@ -92,17 +101,17 @@
       <!-- Current Page Status Row -->
       <div class="row">
         <div id="current-status-pill-container">
-          <span id="current-status-pill" class="pill muted">Status check not configured</span>
+          <span id="current-status-pill" class="pill muted ">Status check not configured</span>
         </div>
-        <button id="btn-recheck" class="sm hidden" title="Re-check archive status">↻</button>
+        <button id="current-btn-recheck" class="sm" title="Re-check archive status">↻</button>
       </div>
 
       <!-- Current Page Errors/Success/Versions -->
       <div id="current-error-container"></div>
-      <ul id="current-versions-list" class="versions hidden"></ul>
-      <div id="current-versions-overflow" class="muted small hidden"></div>
-      <div id="current-last-archived" class="muted small hidden"></div>
-      <div id="current-flash" class="success hidden"></div>
+      <ul id="current-versions-list" class="versions"></ul>
+      <div id="current-versions-overflow" class="muted small">Overflow</div>
+      <div id="current-last-archived" class="muted small "></div>
+      <div id="current-flash" class="success "></div>
 
       <!-- Archive Action Button -->
       <button id="btn-archive" class="primary">
@@ -111,7 +120,6 @@
       </button>
 
       <!-- Site-wide tags (shared across all versions of this URL) -->
-      <div id="current-tags-error" class="tags-error"></div>
       <div id="current-tags-block" class="tags-block">
         <div class="tags-head">
           <span class="muted small">Tags</span>

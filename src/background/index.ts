@@ -1,27 +1,26 @@
 import browser from "webextension-polyfill";
 
-import { createError, createOk, isStandardError, Result } from "@common/error";
+import { createOk, isStandardError, Result } from "@common/error";
 import {
   archiveWithFeedback,
   deleteHeaderMemory,
-  getArchiveStatus,
+  pageLookup,
   handleOpened,
-  openAndArchive,
   patchHeaders,
-  testPageStatus,
 } from "./archive";
-import { PendingInStorage, refreshPending, testPending, updatePendingTags } from "./pending";
+import { refreshPending } from "./pending";
 import { bgRootlog as log, receiveForwardedLogsInBackground } from "@common/log";
 import { session_storage_delete, session_storage_get } from "@common/storage";
-import { isArchivable } from "@common/index";
-import { listTags, setSiteTags } from "./tags";
+import { canonicalizeUrl, extractTabUrl, isArchivable, sha256 } from "@common/index";
 import { Message, MessageData, MessagePayload, MessageType } from "@common/messaging";
 import {
-  Configured,
+  errorIfServerUnconfigured,
   EXTENSION_SETTINGS_SESSION_KEY,
-  getEndpoint,
-  getExtentionSettings,
+  getExtensionSettings,
+  isServerConfigured,
+  storageSettingsFromSetting,
 } from "@common/settings";
+import { applyStatusBadge } from "./badge";
 
 /* Popup/options pages forward their log entries here so everything shows up
    in this (service worker) console. */
@@ -42,9 +41,9 @@ log.info("Service worker / background script initialized", {
 });
 
 async function ensureAlarm(force: boolean = false) {
-  const extentionSettings = await getExtentionSettings();
-  const mins = Math.max(1, Number(extentionSettings.pendingRefreshMinutes) || 0);
-  if (!Number(extentionSettings.pendingRefreshMinutes)) {
+  const extensionSettings = await getExtensionSettings();
+  const mins = Math.max(1, Number(extensionSettings.pendingRefreshMinutes) || 0);
+  if (!Number(extensionSettings.pendingRefreshMinutes)) {
     await browser.alarms.clear(ALARM);
     return;
   }
@@ -56,35 +55,45 @@ async function ensureAlarm(force: boolean = false) {
 /* ================= events ================= */
 browser.tabs.onUpdated.addListener(async (tabId, change, tab) => {
   const loaded = change.status === "complete" || (change.url && tab.status === "complete");
+
   if (!loaded || tab.url === undefined || !isArchivable(tab.url)) return;
   logWebReq.debug("Page load complete", { tabId, url: tab.url });
   if (change.status === "complete" && (await session_storage_get(`open:${tabId}`))) {
     handleOpened(tabId);
   }
-  const extentionSettings = await getExtentionSettings();
-  if (extentionSettings.autoCheck) getArchiveStatus(tabId);
+
+  const { serverUrl, autoCheck } = await getExtensionSettings();
+  const serverUnconfigured = errorIfServerUnconfigured({ serverUrl }, log);
+  if (serverUnconfigured !== null) return serverUnconfigured;
+
+  if (autoCheck) pageLookup(tabId);
 });
 
 browser.tabs.onActivated.addListener(async ({ tabId }) => {
-  const st = await session_storage_get("status:" + tabId);
+  const st = await session_storage_get(`status:${tabId}`);
   if (st) return;
 
   logCheck.debug("Tab activated with no cached status, re-checking", { tabId });
 
-  const extentionSettings = await getExtentionSettings();
-  const tab = await browser.tabs.get(tabId);
+  const { serverUrl, autoCheck } = await getExtensionSettings();
+  const serverUnconfigured = errorIfServerUnconfigured({ serverUrl }, log);
+  if (serverUnconfigured !== null) return serverUnconfigured;
 
-  if (extentionSettings.autoCheck && tab.url !== "") {
-    getArchiveStatus(tabId);
+  if (autoCheck) {
+    pageLookup(tabId);
   }
 });
 
-browser.tabs.onRemoved.addListener((tabId) => {
+browser.tabs.onRemoved.addListener(async (tabId) => {
+  const urlResult = await extractTabUrl(tabId, log);
+  let url = urlResult.ok ? canonicalizeUrl(urlResult.data) : "";
+  const urlShaHash = await sha256(url);
+
   logWebReq.debug("Tab removed", { tabId });
   deleteHeaderMemory(tabId);
   session_storage_delete(
     `hdr:${tabId}`,
-    `status:${tabId}`,
+    `status:${urlShaHash}`,
     `archiveError:${tabId}`,
     `open:${tabId}`,
   ).catch(() => {});
@@ -109,8 +118,8 @@ browser.runtime.onInstalled.addListener(async (d) => {
   log.info("Extension installed/updated", d.reason);
   await ensureAlarm(true);
   refreshPending();
-  const extentionSettings = await getExtentionSettings();
-  if (d.reason === "install" && extentionSettings.serverUrl === "") {
+  const extensionSettings = await getExtensionSettings();
+  if (d.reason === "install" && isServerConfigured(extensionSettings)) {
     log.info("First install, opening options page to configure the server");
     browser.runtime.openOptionsPage();
   }
@@ -127,8 +136,10 @@ browser.storage.onChanged.addListener(async (changes, namespace) => {
   log.debug("Settings changed, refreshing pending list and status", Object.keys(changes));
   await ensureAlarm(true);
   await refreshPending();
+
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  if (tab) getArchiveStatus(tab.id as number);
+
+  if (tab.id !== undefined) await pageLookup(tab.id);
 });
 
 browser.webRequest.onSendHeaders.addListener(
@@ -219,87 +230,72 @@ function isMessage(raw: unknown, handlers: Handlers): raw is Message {
 }
 
 registerHandlers({
-  GET_CONFIGURED: async () => {
-    const extentionSettings = await getExtentionSettings();
-    const endpoint = getEndpoint(extentionSettings);
-    return createOk<Configured>({
-      endpoint,
-      server: endpoint.server !== "",
-      archive: endpoint.archive !== "",
-      pending: endpoint.pending !== "",
-      check: endpoint.check !== "",
-      tags: endpoint.tags !== "",
-      sitesTags: endpoint.sitesTags !== "",
-      pendingLimit: extentionSettings.pendingLimit,
-      logLevel: extentionSettings.logLevel,
-      sensitiveHeaders: extentionSettings.sensitiveHeaders,
-      defaultTags: extentionSettings.defaultTags,
-    });
+  GET_EXTENSION_SETTINGS: async () => {
+    return createOk(storageSettingsFromSetting(await getExtensionSettings()));
   },
-
   // TODO: better tests
-  TEST_ENDPOINTS: async ({ endpoints, token }) => {
+  TEST_ENDPOINTS: async ({ serverUrl: _t, token: _a }) => {
     const result = await Promise.all([
-      testPending(endpoints.pending, token),
-      testPageStatus(endpoints.check, { token, queryUrl: "https://example.com/" }),
+      // TODO:
+      // testPending(endpoints.pending, token),
+      // testPageStatus(endpoints.check, { token, queryUrl: "https://example.com/" }),
     ]);
     return createOk(result);
   },
-  GET_ARCHIVE: async ({ tabId }) => {
-    return await getArchiveStatus(tabId);
-  },
-  GET_PENDING: async () => {
-    const { pending } = (await browser.storage.local.get({ pending: null })) as {
-      pending: PendingInStorage;
-    };
-    return createOk<PendingInStorage>(pending);
-  },
-  REFRESH_PENDING: async () => {
-    const t = await refreshPending();
-    return createOk({ ok: t === null ? false : t.ok });
-  },
-  // TODO: rename update pending
-  SET_PENDING_TAGS: async ({ id, tags }) => {
-    return await updatePendingTags(id, { tags });
-  },
-  ARCHIVE_TAB: async ({ tabId, tags }) => {
-    // `tags` is optional: when given, they are sent along with the archive request
-    // (the server merges them into the site's existing tags, creating unknown ones).
-    return await archiveWithFeedback(tabId, { toast: false, tags });
+  PAGE_LOOKUP: async ({ tabId }) => {
+    const lookupResult = await pageLookup(tabId);
+    applyStatusBadge(tabId, lookupResult);
+    return lookupResult;
   },
 
-  GET_TAGS: async () => {
-    return await listTags();
-  },
+  // GET_PENDING: async () => {
+  //   const { pending } = (await browser.storage.local.get({ pending: null })) as {
+  //     pending: PendingInStorage;
+  //   };
+  //   return createOk<PendingInStorage>(pending);
+  // },
+  // REFRESH_PENDING: async () => {
+  //   const t = await refreshPending();
+  //   return createOk({ ok: t === null ? false : t.ok });
+  // },
+  // // TODO: rename update pending
+  // SET_PENDING_TAGS: async ({ id, tags }) => {
+  //   return await updatePendingTags(id, { tags });
+  // },
+  // ARCHIVE_TAB: async ({ tabId, tags }) => {
+  //   // `tags` is optional: when given, they are sent along with the archive request
+  //   // (the server merges them into the site's existing tags, creating unknown ones).
+  //   return await archiveWithFeedback(tabId, { toast: false, tags });
+  // },
 
-  SET_SITE_TAGS: async ({ url, tags }, sender) => {
-    const result = await setSiteTags(url, tags);
-    // Tags are site-wide: after changing them, refresh the cached status so the
-    // next GET_ARCHIVE for this tab returns the new tag list.
-    if (result.ok === true && sender?.tab?.id !== undefined) {
-      await session_storage_delete(`status:${sender.tab.id}`);
-    }
-    return result;
-  },
-  OPEN_AND_ARCHIVE: async ({ url, tags }) => {
-    // Optional tags ride along on the opened-tab flag; pending-queue tags merge
-    // inside archiveTab regardless.
-    await openAndArchive(url, tags ?? []);
-    return createOk(undefined);
-  },
-  ARCHIVE_FROM_PAGE: async ({ tags }, sender) => {
-    if (sender.tab?.id === undefined) {
-      return createError({
-        logger: log,
-        message: "Tab id undefined in ARCHIVE_FROM_PAGE",
-      });
-    }
+  // SET_SITE_TAGS: async ({ url, tags }, sender) => {
+  //   const result = await setSiteTags(url, tags);
+  //   // Tags are site-wide: after changing them, refresh the cached status so the
+  //   // next GET_ARCHIVE for this tab returns the new tag list.
+  //   if (result.ok === true && sender?.tab?.id !== undefined) {
+  //     await session_storage_delete(`status:${sender.tab.id}`);
+  //   }
+  //   return result;
+  // },
+  // OPEN_AND_ARCHIVE: async ({ url, tags }) => {
+  //   // Optional tags ride along on the opened-tab flag; pending-queue tags merge
+  //   // inside archiveTab regardless.
+  //   await openAndArchive(url, tags ?? []);
+  //   return createOk(undefined);
+  // },
+  // ARCHIVE_FROM_PAGE: async ({ tags }, sender) => {
+  //   if (sender.tab?.id === undefined) {
+  //     return createError({
+  //       logger: log,
+  //       message: "Tab id undefined in ARCHIVE_FROM_PAGE",
+  //     });
+  //   }
 
-    const result = await archiveWithFeedback(sender.tab.id, { toast: false, tags });
-    if (result.ok === false) {
-      return result;
-    }
+  //   const result = await archiveWithFeedback(sender.tab.id, { toast: false, tags });
+  //   if (result.ok === false) {
+  //     return result;
+  //   }
 
-    return await getArchiveStatus(sender.tab.id);
-  },
+  //   return await getArchiveStatus(sender.tab.id);
+  // },
 });

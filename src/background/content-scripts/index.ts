@@ -1,7 +1,5 @@
-import type { Result } from "@common/error";
-import { ArchiveStatus } from "../archive";
 import { IdLessTag } from "../tags";
-import type { Url, Option } from "@common/types";
+import type { UrlStr, Option, Vec } from "@common/types";
 
 export interface BannerOpts {
   kind: "ok" | "err" | (string & {});
@@ -22,7 +20,7 @@ export interface Page {
   lastModified: string; // eg: "09/04/2026 17:47:04"
   canonical: Option<string>;
 
-  favicon: Option<Url>;
+  favicon: Option<UrlStr>;
   meta: Record<string, Option<string>>;
   viewport: {
     width: number; //      eg: 1080
@@ -125,23 +123,25 @@ export function pageBanner(opts: BannerOpts) {
   const archive = async () => {
     render("", "Archiving…", []);
 
-    const result: Result<ArchiveStatus> = await api.runtime.sendMessage({
+    // TODO:
+    // const result: Result<unknown> = await api.runtime.sendMessage({
+    await api.runtime.sendMessage({
       type: "ARCHIVE_FROM_PAGE",
       // explicitly selected tags; pending-queue tags merge in the background
       payload: { tags: [...chosen] },
     });
 
-    if (result.ok === true && result.data.state === "ok") {
-      const count = result.data.count;
+    // if (result.ok === true && result.data.state === "ok") {
+    //   const count = result.data.captureCount;
 
-      render("ok", "Archived ✓" + (count ? ` (${count} version${count === 1 ? "" : "s"})` : ""), [
-        ["Close", close],
-      ]);
+    //   render("ok", "Archived ✓" + (count ? ` (${count} version${count === 1 ? "" : "s"})` : ""), [
+    //     ["Close", close],
+    //   ]);
 
-      timer = setTimeout(close, 5000);
-    } else {
-      render("err", `Archive failed: ${JSON.stringify(result, null, 2)}`, [["Close", close]]);
-    }
+    //   timer = setTimeout(close, 5000);
+    // } else {
+    //   render("err", `Archive failed: ${JSON.stringify(result, null, 2)}`, [["Close", close]]);
+    // }
   };
 
   const renderChips = () => {

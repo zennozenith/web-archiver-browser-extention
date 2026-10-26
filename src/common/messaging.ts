@@ -1,12 +1,10 @@
 import browser from "webextension-polyfill";
-import type { Int, Int64, Url } from "./types.ts";
+import { Int, UrlStr, Vec } from "./types.ts";
 import { log as rootLog } from "./log.ts";
 import { Result } from "./error.ts";
-import { Configured, Endpoint } from "./settings.ts";
-import { ApiArchiveResponse, ArchiveStatus } from "@src/background/archive.ts";
-import { PendingDto, PendingInStorage } from "@src/background/pending.ts";
 import { TestEndpointResponse } from "@src/background/reqwest.ts";
-import { ApiTag, IdLessTag } from "@src/background/tags.ts";
+import { StorageExtensionSettings } from "./settings.ts";
+import { ApiPageDetail } from "@src/background/archive.ts";
 
 const log = rootLog.child("messaging");
 
@@ -17,32 +15,32 @@ export type Empty = Record<string, never>;
  * a successful response carries.
  */
 export interface MessageMap {
-  GET_CONFIGURED: { payload: undefined; data: Configured };
+  GET_EXTENSION_SETTINGS: { payload: undefined; data: StorageExtensionSettings };
   TEST_ENDPOINTS: {
-    payload: { endpoints: Endpoint; token?: string };
+    payload: { serverUrl: UrlStr; token?: string };
     data: TestEndpointResponse[];
   };
-  GET_TAGS: { payload: undefined; data: ApiTag[] };
-  GET_ARCHIVE: { payload: { tabId: Int }; data: ArchiveStatus };
-  GET_PENDING: { payload: undefined; data: PendingInStorage };
-  SET_PENDING_TAGS: {
-    payload: { id: Int64; tags: string[] };
-    data: PendingDto;
-  };
-  ARCHIVE_TAB: {
-    payload: { tabId: Int; tags: Vec<IdLessTag> };
-    data: {
-      response: ApiArchiveResponse;
-      warnings: string[];
-    };
-  };
-  SET_SITE_TAGS: { payload: { url: Url; tags: Vec<IdLessTag> }; data: Vec<IdLessTag> };
-  REFRESH_PENDING: { payload: undefined; data: { ok: boolean } };
-  OPEN_AND_ARCHIVE: { payload: { url: Url; tags?: string[] }; data: void };
-  ARCHIVE_FROM_PAGE: {
-    payload: { tags: Vec<IdLessTag> };
-    data: ArchiveStatus;
-  };
+  PAGE_LOOKUP: { payload: { tabId: Int }; data: ApiPageDetail | null };
+  // GET_PENDING: { payload: undefined; data: PendingInStorage };
+  // GET_ARCHIVE: { payload: { tabId: Int }; data: ArchiveStatus };
+  // SET_PENDING_TAGS: {
+  //   payload: { id: Int64; tags: string[] };
+  //   data: PendingDto;
+  // };
+  // ARCHIVE_TAB: {
+  //   payload: { tabId: Int; tags: Vec<IdLessTag> };
+  //   data: {
+  //     response: ApiArchiveResponse;
+  //     warnings: string[];
+  //   };
+  // };
+  // SET_SITE_TAGS: { payload: { url: Url; tags: Vec<IdLessTag> }; data: Vec<IdLessTag> };
+  // REFRESH_PENDING: { payload: undefined; data: { ok: boolean } };
+  // OPEN_AND_ARCHIVE: { payload: { url: Url; tags?: string[] }; data: void };
+  // ARCHIVE_FROM_PAGE: {
+  //   payload: { tags: Vec<IdLessTag> };
+  //   data: ArchiveStatus;
+  // };
 }
 
 export type MessageType = keyof MessageMap;
@@ -96,8 +94,8 @@ function isMessageResponse<D>(value: unknown): value is Result<D> {
   return (
     v.ok === true ||
     (v.ok === false &&
-      Vec.isVec(v.extra) &&
-      Vec.isVec(v.messages) &&
+      Vec.isArray(v.extra) &&
+      Vec.isArray(v.messages) &&
       v.messages.length > 0 &&
       v.messages.every((el): el is string => typeof el === "string"))
   );

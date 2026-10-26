@@ -1,6 +1,6 @@
 import { createError, isNamedError, isStandardError, Result } from "@common/error";
 import { log as rootLog } from "@common/log";
-import type { ReqeustOptions, Url } from "@common/types";
+import type { ReqeustOptions } from "@common/types";
 
 const log = rootLog.child("http");
 
@@ -26,7 +26,7 @@ export interface ApiErrorResponse {
 }
 
 export async function request<T>(
-  url: Url,
+  url: URL,
   {
     method = "GET",
     body,
@@ -35,13 +35,13 @@ export async function request<T>(
     timeoutMs = 30000,
   }: ReqeustOptions = {},
 ): Promise<Result<T>> {
-  try {
-    new URL(url);
-  } catch {
-    return createError({
-      message: `Invalid URL: "${url}"`,
-    });
-  }
+  // try {
+  //   new URL(url);
+  // } catch {
+  //   return createError({
+  //     message: `Invalid URL: "${url}"`,
+  //   });
+  // }
 
   const headers: Record<string, string> = { Accept: "application/json", ...orignalHeaders };
   if (token) headers.Authorization = `Bearer ${token}`;

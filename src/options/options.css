@@ -1,3 +1,5 @@
+@import "./toaster.css";
+
 :root {
   --bg: #fff;
   --fg: #1f2328;
@@ -220,4 +222,176 @@ td {
   background-color: #fef2f2;
   color: var(--err);
   border-color: var(--err);
+}
+
+.toaster-container {
+  position: fixed;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;
+  padding: 16px;
+  box-sizing: border-box;
+}
+.toaster-container[data-position^="top"] {
+  top: 0;
+}
+.toaster-container[data-position^="bottom"] {
+  bottom: 0;
+}
+.toaster-container[data-position$="left"] {
+  left: 0;
+}
+.toaster-container[data-position$="right"] {
+  right: 0;
+}
+.toaster-container[data-position$="center"] {
+  left: 50%;
+  transform: translateX(-50%);
+}
+.toaster-container[data-position$="center"] {
+  align-items: center;
+}
+.toaster-container[data-position$="left"] {
+  align-items: flex-start;
+}
+.toaster-container[data-position$="right"] {
+  align-items: flex-end;
+}
+
+.toaster-item {
+  pointer-events: auto;
+  min-width: 250px;
+  max-width: 400px;
+  padding: 12px 40px 12px 16px;
+  border-radius: 8px;
+  font-family:
+    system-ui,
+    -apple-system,
+    Segoe UI,
+    Roboto,
+    sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  word-wrap: break-word;
+
+  /* Theme-aware */
+  background-color: var(--bg, #fff);
+  color: var(--fg, #1f2328);
+  border: 1px solid var(--border, #d0d7de);
+  border-left-width: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+
+  animation: toaster-slide-in 0.25s ease-out;
+  transition:
+    transform 0.2s ease,
+    opacity 0.2s ease;
+}
+
+.toaster-item--success {
+  border-left-color: var(--ok, #188038);
+}
+.toaster-item--error {
+  border-left-color: var(--err, #d93025);
+}
+.toaster-item--warning {
+  border-left-color: var(--warn, #b26a00);
+}
+.toaster-item--info {
+  border-left-color: var(--accent, #2563eb);
+}
+
+.toaster-icon {
+  flex-shrink: 0;
+  font-weight: 700;
+  font-size: 16px;
+}
+.toaster-item--success .toaster-icon {
+  color: var(--ok, #188038);
+}
+.toaster-item--error .toaster-icon {
+  color: var(--err, #d93025);
+}
+.toaster-item--warning .toaster-icon {
+  color: var(--warn, #b26a00);
+}
+.toaster-item--info .toaster-icon {
+  color: var(--accent, #2563eb);
+}
+
+.toaster-message {
+  flex: 1 1 auto;
+}
+
+.toaster-item--closing {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+.toaster-close {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  background: transparent;
+  border: none;
+  color: var(--muted, #6b7280);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 4px;
+  transition: color 0.15s;
+}
+.toaster-close:hover {
+  color: var(--fg, #1f2328);
+}
+
+.toaster-progress {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 3px;
+  width: 100%;
+  transform-origin: left;
+  animation: toaster-progress linear forwards;
+  background-color: var(--muted, #6b7280);
+  opacity: 0.4;
+  border-bottom-left-radius: 8px;
+  border-bottom-right-radius: 8px;
+}
+.toaster-item--success .toaster-progress {
+  background-color: var(--ok, #188038);
+}
+.toaster-item--error .toaster-progress {
+  background-color: var(--err, #d93025);
+}
+.toaster-item--warning .toaster-progress {
+  background-color: var(--warn, #b26a00);
+}
+.toaster-item--info .toaster-progress {
+  background-color: var(--accent, #2563eb);
+}
+
+@keyframes toaster-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes toaster-progress {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
 }

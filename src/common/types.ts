@@ -2,16 +2,10 @@ export type Int = number;
 export type Int64 = number;
 export type UInt64 = number;
 export type ISODateTime = string;
-export type Url = string;
-export type Uuid = string;
+export type UrlStr = string; // TODO: remove
 
 export type Vec<T> = Array<T>;
 export const Vec = Array;
-
-export interface OverrideUrl {
-  override: boolean;
-  url: Url;
-}
 
 export interface NonEmptyVec<T> extends Vec<T> {
   0: T;
