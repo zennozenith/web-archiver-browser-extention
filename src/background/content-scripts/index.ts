@@ -1,13 +1,14 @@
 import type { Result } from "@common/error";
 import { ArchiveStatus } from "../archive";
 import { IdLessTag } from "../tags";
+import type { Url, Option } from "@common/types";
 
 export interface BannerOpts {
   kind: "ok" | "err" | (string & {});
   text: string;
   mode: "prompt" | "toast" | (string & {});
   /* optional (prompt mode): tag names offered as a chip row before confirming */
-  tags?: Array<IdLessTag>;
+  tags?: Vec<IdLessTag>;
 }
 
 export interface Page {
@@ -15,14 +16,14 @@ export interface Page {
   url: string;
   title: string;
   referrer: string;
-  lang: string | null; //  eg: "en-US"
+  lang: Option<string>; //  eg: "en-US"
   charset: string; //      eg: "UTF-8",
   contentType: string; //  eg: "text/html",
   lastModified: string; // eg: "09/04/2026 17:47:04"
-  canonical: string | null;
+  canonical: Option<string>;
 
-  favicon: any;
-  meta: Record<string, string | null>;
+  favicon: Option<Url>;
+  meta: Record<string, Option<string>>;
   viewport: {
     width: number; //      eg: 1080
     height: number; //     eg: 1902

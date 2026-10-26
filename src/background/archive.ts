@@ -4,7 +4,7 @@ import browser from "webextension-polyfill";
 import { createError, createOk, isStandardError, type Result } from "@common/error";
 import { bgRootlog } from "@common/log";
 import { request, TestEndpointResponse } from "./reqwest";
-import type { Int, Int64, ISODateTime, Url, Uuid } from "@common/types";
+import { Int, Int64, Url, Option, Vec } from "@common/types";
 import { session_storage_delete, session_storage_get, session_storage_set } from "@common/storage";
 import { getEndpoint, getExtentionSettings } from "@common/settings";
 import { isArchivable, normalizeUrl, sha256 } from "@common/index";
@@ -32,30 +32,40 @@ export interface HeadersDetails {
   statusCode: number;
 }
 
-export interface ApiSuccessArchiveResponse {
-  success: true;
-  message: string;
-  id: Uuid;
-  url: Url;
-  archivedAt: ISODateTime;
-  versionCount: number;
+export interface Dedup {
+  html: boolean;
+  screenshot: Option<boolean>;
 }
 
-export interface ApiArchiveVersionsResponse {
-  archived: boolean;
-  count: number;
-  tags: Array<ApiTag>;
-  versions: {
-    id: string;
-    archivedAt: ISODateTime;
-    url: Url;
-    title: string;
-    htmlSize: number;
-    hasScreenshot: boolean;
-    /* "png" | "jpg"; extension of the stored screenshot file (null on legacy rows) */
-    screenshotExt?: string | null;
-  }[];
-  lastArchivedAt?: ISODateTime;
+export interface ApiArchiveResponse {
+  capture_id: Int64;
+  page_id: Int64;
+  version: Int64;
+  deduplicated: Dedup;
+}
+
+export interface ApiPageDto {
+  id: Int64;
+  url: string;
+  host: string;
+  title: Option<string>;
+  capture_count: Int64;
+  last_captured_at: Option<Int64>;
+  tags: Vec<ApiTag>;
+}
+
+export interface ApiCaptureSummary {
+  id: Int64;
+  version: Int64;
+  captured_at: Int64;
+  title: Option<string>;
+  status_code: Option<string>;
+  content_hash: Option<string>; // hex
+  has_screenshot: boolean;
+}
+
+export interface ApiPageDetail extends ApiPageDto {
+  latest_capture: ApiCaptureSummary;
 }
 
 interface ArchiveErrorStatus {
@@ -65,10 +75,10 @@ interface ArchiveErrorStatus {
   checkedAt: number;
 }
 
-export interface ArchiveOkStatus extends ApiArchiveVersionsResponse {
+export interface ArchiveOkStatus extends ApiPageDetail {
   state: "ok";
   url: Url;
-  checkedAt: number;
+  checked_at: number;
 }
 
 export type ArchiveStatus = ArchiveOkStatus | ArchiveErrorStatus;
@@ -78,7 +88,7 @@ const inflight = new Map<`${Int}|${Url}`, Promise<Result<ArchiveStatus>>>();
 const sleep = (ms: Int) => new Promise((resolve) => setTimeout(resolve, ms));
 const headerMemory = new Map<Int, Partial<HeadersDetails>>();
 
-export function mergeTags(...lists: Array<ApiTag>[]): Array<ApiTag> {
+export function mergeTags(...lists: Vec<ApiTag>[]): Vec<ApiTag> {
   const byId = new Map<Int64, ApiTag>();
   for (const list of lists) {
     for (const tag of list) {
@@ -87,12 +97,12 @@ export function mergeTags(...lists: Array<ApiTag>[]): Array<ApiTag> {
   }
   return [...byId.values()];
 }
-export function mergeTagNames(...lists: Array<IdLessTag>[]): IdLessTag[] {
+export function mergeTagNames(...lists: Vec<IdLessTag>[]): IdLessTag[] {
   const byName = new Map<string, IdLessTag>();
   for (const list of lists) for (const tag of list) byName.set(tag.name, tag);
   return [...byName.values()];
 }
-export function mergeTagNamesNames(...lists: Array<IdLessTag>[]): string[] {
+export function mergeTagNamesNames(...lists: Vec<IdLessTag>[]): string[] {
   return [...new Set(lists.flat().map((t) => t.name))];
 }
 
@@ -172,10 +182,10 @@ function applyStatusBadge(tabId: Int, archiveStatus: ArchiveStatus | null): Prom
     });
   }
 
-  if (archiveStatus.state === "ok" && archiveStatus.archived) {
-    const n = archiveStatus.count || archiveStatus.versions?.length || 0;
-    const when = archiveStatus.versions?.[0]?.archivedAt ?? archiveStatus.lastArchivedAt;
-    const tagNames = mergeTagNamesNames(archiveStatus.tags);
+  if (archiveStatus.state === "ok") {
+    const n = archiveStatus.page_detail.capture_count;
+    const when = archiveStatus.page_detail.last_captured_at;
+    const tagNames = archiveStatus.page_detail.tags;
     return updateBadge({
       tabId,
       text: n ? (n > 99 ? "99+" : String(n)) : "✓",
@@ -196,10 +206,10 @@ function applyStatusBadge(tabId: Int, archiveStatus: ArchiveStatus | null): Prom
 
 async function archiveTab(
   tabId: Int,
-  { tags }: { tags?: Array<IdLessTag> } = {},
+  { tags }: { tags?: Vec<IdLessTag> } = {},
 ): Promise<
   Result<{
-    response: ApiSuccessArchiveResponse;
+    response: ApiArchiveResponse;
     warnings: string[];
   }>
 > {
@@ -219,7 +229,7 @@ async function archiveTab(
 
     const extensionSettings = await getExtentionSettings();
     const endpoint = getEndpoint(extensionSettings);
-    if (!endpoint.server || !endpoint.archive) {
+    if (!endpoint.archive) {
       log.debug("Server/Archive URL not configured");
       return createError({
         logger: log,
@@ -300,12 +310,12 @@ async function archiveTab(
       );
     }
 
-    const { html, scrollWidth, scrollHeight, ...pageInfo } = page;
+    const { html, title, url: pageUrl, scrollWidth, scrollHeight, ...pageInfo } = page;
     const htmlBlob = new Blob([html], { type: "text/html;charset=utf-8" });
     const metadata = {
       schema: 1,
-      url: page.url,
-      title: page.title,
+      url: pageUrl,
+      title,
       capturedAt: new Date().toISOString(),
       page: { ...pageInfo, scroll: { width: scrollWidth, height: scrollHeight } },
       request: headers
@@ -351,16 +361,14 @@ async function archiveTab(
     };
 
     const formData = new FormData();
-    formData.append(
-      "metadata",
-      new Blob([JSON.stringify(metadata)], { type: "application/json" }),
-      "metadata.json",
-    );
-    formData.append("html", htmlBlob, "page.html");
-    // Includes tags queued via the pending queue (created server-side if unknown).
+    formData.append("html", htmlBlob);
+    formData.append("url", url);
+    formData.append("title", title);
+
     if (allTags.length) {
-      formData.append("tags", JSON.stringify(allTags));
+      formData.append("tags", JSON.stringify(allTags.map((v) => v.name)));
     }
+
     if (maybeScreenshot?.ok) {
       formData.append("screenshot-format", maybeScreenshot.data.format);
       formData.append(
@@ -369,14 +377,16 @@ async function archiveTab(
         `screenshot.${maybeScreenshot.data.ext}`,
       );
     }
+    formData.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
+    // Includes tags queued via the pending queue (created server-side if unknown).
 
     log.info("Uploading archive", {
-      url: page.url,
+      url: pageUrl,
       htmlBytes: htmlBlob.size,
       screenshotBytes: maybeScreenshot?.ok ? maybeScreenshot.data.blob.size : null,
     });
 
-    const result = await request<ApiSuccessArchiveResponse>(endpoint.archive, {
+    const result = await request<ApiArchiveResponse>(endpoint.archive, {
       method: "POST",
       body: formData,
       token: extensionSettings.apiToken,
@@ -406,10 +416,10 @@ async function archiveTab(
 
 export async function archiveWithFeedback(
   tabId: Int,
-  { toast, tags }: { toast: boolean; tags?: Array<IdLessTag> },
+  { toast, tags }: { toast: boolean; tags?: Vec<IdLessTag> },
 ): Promise<
   Result<{
-    response: ApiSuccessArchiveResponse;
+    response: ApiArchiveResponse;
     warnings: string[];
   }>
 > {
@@ -420,7 +430,8 @@ export async function archiveWithFeedback(
     }
 
     if (toast) {
-      const n = result.data.response.versionCount;
+      const n = result.data.response.version;
+      log.error(`Archived ✓${n ? ` (${n} version${n === 1 ? "" : "s"})` : ""}`);
       injectBanner(tabId, {
         mode: "toast",
         kind: "ok",
@@ -458,7 +469,7 @@ export async function archiveWithFeedback(
   }
 }
 
-export async function testArchiveStatus(
+export async function testPageStatus(
   archiveUrl: Url,
   {
     token,
@@ -468,23 +479,20 @@ export async function testArchiveStatus(
     queryUrl?: Url;
   } = {},
 ): Promise<TestEndpointResponse> {
-  const responseData = await request<ApiArchiveVersionsResponse>(
-    buildArchiveStatusUrl(archiveUrl, queryUrl),
-    {
-      token,
-      timeoutMs: 20000,
-    },
-  );
+  const responseData = await request<ApiPageDetail>(buildArchiveStatusUrl(archiveUrl, queryUrl), {
+    token,
+    timeoutMs: 20000,
+  });
 
   if (!responseData.ok) {
     return {
       ok: false,
-      text: `archive check ✗ ${responseData.messages.toString()}`,
+      text: `page check ✗ ${responseData.messages.toString()}`,
     };
   }
   return {
     ok: true,
-    text: `archive check ✓ [for "${queryUrl}" ${responseData.data.count} version(s)]`,
+    text: `page check ✓ [for "${queryUrl}" ${responseData.data.capture_count} capture(s)]`,
   };
 }
 
@@ -544,13 +552,10 @@ export async function getArchiveStatus(tabId: Int): Promise<Result<ArchiveStatus
     logArchiveStatus.debug("Checking archive status", { tabId, url });
     const done = logArchiveStatus.time("status check");
     try {
-      const data = await request<ApiArchiveVersionsResponse>(
-        buildArchiveStatusUrl(endpoint.check, url),
-        {
-          token: extentionSettings.apiToken,
-          timeoutMs: 20000,
-        },
-      );
+      const data = await request<ApiPageDetail>(buildArchiveStatusUrl(endpoint.check, url), {
+        token: extentionSettings.apiToken,
+        timeoutMs: 20000,
+      });
       if (data.ok === false) {
         archiveStatus = {
           state: "error",
@@ -559,7 +564,7 @@ export async function getArchiveStatus(tabId: Int): Promise<Result<ArchiveStatus
           error: data.messages.toString(),
         };
       } else {
-        archiveStatus = { state: "ok", url, checkedAt: Date.now(), ...data.data };
+        archiveStatus = { state: "ok", url, checked_at: Date.now(), page_detail: data.data };
       }
       done(archiveStatus.state);
     } catch (e) {
@@ -595,7 +600,7 @@ export async function handleOpened(tabId: Int) {
   const opened = (await session_storage_get(`open:${tabId}`)) as {
     url: Url;
     at: number;
-    tags?: Array<IdLessTag>;
+    tags?: Vec<IdLessTag>;
   };
   await session_storage_delete(`open:${tabId}`);
   const s = await getExtentionSettings();
@@ -614,9 +619,10 @@ export async function handleOpened(tabId: Int) {
   } else {
     // Prompt mode: offer a tag chip row (site's current/default tags, preselected)
     // before confirming; chosen tags are sent with ARCHIVE_FROM_PAGE.
-    const defaults = mergeTagNames(Array.from(s.defaultTags), opened?.tags ?? []);
+    const defaults = mergeTagNames(Vec.from(s.defaultTags), opened?.tags ?? []);
     const status = await getArchiveStatus(tabId);
-    const siteTags = status.ok === true && status.data.state === "ok" ? status.data.tags : [];
+    const siteTags =
+      status.ok === true && status.data.state === "ok" ? status.data.page_detail.tags : [];
     injectBanner(tabId, {
       kind: "",
       mode: "prompt",

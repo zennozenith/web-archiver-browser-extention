@@ -5,12 +5,15 @@ export type ISODateTime = string;
 export type Url = string;
 export type Uuid = string;
 
+export type Vec<T> = Array<T>;
+export const Vec = Array;
+
 export interface OverrideUrl {
   override: boolean;
   url: Url;
 }
 
-export interface NonEmptyArray<T> extends Array<T> {
+export interface NonEmptyVec<T> extends Vec<T> {
   0: T;
 }
 
@@ -27,6 +30,6 @@ export type Option<T> = T | null;
 export type WithNullish<T> = T | null | undefined;
 
 export interface Page<T> {
-  items: Array<T>;
+  items: Vec<T>;
   next_cursor: Option<string>;
 }

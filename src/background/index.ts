@@ -8,7 +8,7 @@ import {
   handleOpened,
   openAndArchive,
   patchHeaders,
-  testArchiveStatus,
+  testPageStatus,
 } from "./archive";
 import { PendingInStorage, refreshPending, testPending, updatePendingTags } from "./pending";
 import { bgRootlog as log, receiveForwardedLogsInBackground } from "@common/log";
@@ -241,7 +241,7 @@ registerHandlers({
   TEST_ENDPOINTS: async ({ endpoints, token }) => {
     const result = await Promise.all([
       testPending(endpoints.pending, token),
-      testArchiveStatus(endpoints.check, { token, queryUrl: "https://example.com/" }),
+      testPageStatus(endpoints.check, { token, queryUrl: "https://example.com/" }),
     ]);
     return createOk(result);
   },

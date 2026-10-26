@@ -2,7 +2,7 @@ import browser from "webextension-polyfill";
 
 import { EventBus } from "@common/event-bus";
 import { formatTime, formatTimeFromSec, timeAgo, timeAgoFromSec } from "@common/time";
-import type { Url } from "@common/types";
+import type { Url, Vec } from "@common/types";
 import { ArchiveOkStatus, ArchiveStatus } from "@src/background/archive";
 import { Configured } from "@common/settings";
 import { sendToBackground } from "@common/messaging";
@@ -22,11 +22,11 @@ interface UiEvents {
   "render:archive:checking:error": { archiveStatus: Exclude<ArchiveStatus, ArchiveOkStatus> };
   "render:archive:checking:ok": { archiveStatus: ArchiveOkStatus };
   "render:tags": { archiveStatus: ArchiveOkStatus | null };
-  "tags:set": { url: Url; tags: Array<IdLessTag> };
-  "tags:set:ok": { tags: Array<IdLessTag> };
+  "tags:set": { url: Url; tags: Vec<IdLessTag> };
+  "tags:set:ok": { tags: Vec<IdLessTag> };
   "tags:set:error": { message: string };
   /* Seed a not-yet-archived site with the user's default tags (once per URL). */
-  "tags:seed:defaults": { url: Url; existing: Array<IdLessTag> };
+  "tags:seed:defaults": { url: Url; existing: Vec<IdLessTag> };
   "error:any": { message: string };
   "error:any:clear": void;
 }
@@ -101,7 +101,7 @@ let tab: browser.Tabs.Tab,
   shortcut = "";
 
 /* Site-wide tags for the current page's URL + global tag names for the (<datalist>) suggestions. */
-let siteTags: Array<IdLessTag> = [];
+let siteTags: Vec<IdLessTag> = [];
 let tagsUrl: Url | null = null;
 let knownTags: string[] = [];
 /* URLs whose default tags were already offered this popup session
@@ -186,9 +186,9 @@ async function addTagFromInput() {
 }
 
 /** Default tags from the settings that the site does not have yet (as provisional chips). */
-// function missingDefaultTags(existing: { name: string }[] = []): Array<TagRef> {
+// function missingDefaultTags(existing: { name: string }[] = []): Vec<TagRef> {
 //   const have = new Set(existing.map((t) => t.name.toLowerCase()));
-//   return Array.from(configured.defaultTags)
+//   return Vec.from(configured.defaultTags)
 //     .filter((n) => {
 //       const name = n.trim().slice(0, 64);
 //       return name && !have.has(name.toLowerCase());
@@ -424,10 +424,10 @@ appBus.on("archive:check", async () => {
 
   // Page not archived yet: offer the user's default tags (persisted via
   // SET_SITE_TAGS, which creates unknown tag names server-side).
-  if (archiveStatus.state === "ok" && !archiveStatus.archived) {
+  if (archiveStatus.state === "ok") {
     uiBus.emit("tags:seed:defaults", {
       url: archiveStatus.url,
-      existing: archiveStatus.tags ?? [],
+      existing: archiveStatus.page_detail.tags ?? [],
     });
   }
 
@@ -524,55 +524,49 @@ uiBus.on("render:archive:checking:error", ({ archiveStatus }) => {
 uiBus.on("render:archive:checking:ok", ({ archiveStatus }) => {
   btnRecheck.disabled = false;
 
-  if (archiveStatus.archived) {
-    const count = archiveStatus.count || archiveStatus.versions.length || 1;
-    currentStatusPill.className = "pill ok";
-    currentStatusPill.textContent = `Archived · ${count} version${count === 1 ? "" : "s"}`;
-  } else {
-    currentStatusPill.className = "pill warn";
-    currentStatusPill.textContent = "Not archived";
-  }
+  const count = archiveStatus.capture_count;
+  currentStatusPill.className = "pill ok";
+  currentStatusPill.textContent = `Archived · ${count} version${count === 1 ? "" : "s"}`;
 
   // Versions List
   currentVersionsList.innerHTML = "";
 
-  if (archiveStatus.versions.length === 0 || !archiveStatus.archived) {
-    currentVersionsList.classList.add("hidden");
-    currentVersionsOverflow.classList.add("hidden");
-    currentLastArchived.classList.add("hidden");
-    btnArchiveText.textContent = "Archive this page";
-    return;
-  }
+  // if (archiveStatus.versions.length === 0 || !archiveStatus.archived) {
+  //   currentVersionsList.classList.add("hidden");
+  //   currentVersionsOverflow.classList.add("hidden");
+  //   currentLastArchived.classList.add("hidden");
+  //   btnArchiveText.textContent = "Archive this page";
+  //   return;
+  // }
 
   currentVersionsList.classList.remove("hidden");
-  const n = archiveStatus.versions.length;
-  const total = archiveStatus.count || n;
+  const total = archiveStatus.capture_count;
 
-  archiveStatus.versions.slice(0, 20).forEach((version, i) => {
-    const li = document.createElement("li");
+  // archiveStatus.versions.slice(0, 20).forEach((version, i) => {
+  //   const li = document.createElement("li");
 
-    if (version.url) {
-      const a = document.createElement("a");
-      a.textContent = `${total - i}`;
-      a.addEventListener("click", () => openTab(version.url));
-      li.appendChild(a);
-    } else {
-      const span = document.createElement("span");
-      span.textContent = version.id ?? `v${total - i}`;
-      li.appendChild(span);
-    }
+  //   if (version.url) {
+  //     const a = document.createElement("a");
+  //     a.textContent = `${total - i}`;
+  //     a.addEventListener("click", () => openTab(version.url));
+  //     li.appendChild(a);
+  //   } else {
+  //     const span = document.createElement("span");
+  //     span.textContent = version.id ?? `v${total - i}`;
+  //     li.appendChild(span);
+  //   }
 
-    const timeSpan = document.createElement("span");
-    timeSpan.textContent = formatTime(version.archivedAt);
-    li.appendChild(timeSpan);
+  //   const timeSpan = document.createElement("span");
+  //   timeSpan.textContent = formatTime(version.archivedAt);
+  //   li.appendChild(timeSpan);
 
-    const agoSpan = document.createElement("span");
-    agoSpan.className = "muted";
-    agoSpan.textContent = timeAgo(version.archivedAt);
-    li.appendChild(agoSpan);
+  //   const agoSpan = document.createElement("span");
+  //   agoSpan.className = "muted";
+  //   agoSpan.textContent = timeAgo(version.archivedAt);
+  //   li.appendChild(agoSpan);
 
-    currentVersionsList.appendChild(li);
-  });
+  //   currentVersionsList.appendChild(li);
+  // });
 
   if (total > 20) {
     currentVersionsOverflow.classList.remove("hidden");
@@ -596,7 +590,7 @@ uiBus.on("render:tags", ({ archiveStatus }) => {
     // provisional chips until they have been persisted.
     siteTags = (archiveStatus.tags ?? []).length
       ? (archiveStatus.tags ?? [])
-      : Array.from(configured.defaultTags);
+      : Vec.from(configured.defaultTags);
   } else {
     siteTags = [];
     tagsUrl = null;
@@ -610,7 +604,7 @@ uiBus.on("render:tags", ({ archiveStatus }) => {
 
 /* Persist default tags on a not-yet-archived site (once per URL per popup session). */
 uiBus.on("tags:seed:defaults", async ({ url, existing }) => {
-  const defaults = Array.from(configured.defaultTags);
+  const defaults = Vec.from(configured.defaultTags);
   if (!configured.sitesTags || !defaults.length || defaultsSeeded.has(url)) return;
   defaultsSeeded.add(url);
 

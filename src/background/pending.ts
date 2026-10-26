@@ -2,7 +2,7 @@ import browser from "webextension-polyfill";
 
 import { createError, createOk, type Result } from "@common/error";
 import { bgRootlog as log } from "@common/log";
-import type { Url, Option, Int64, Page } from "@common/types";
+import type { Url, Option, Int64, Page, Vec } from "@common/types";
 import { getEndpoint, getExtentionSettings } from "@common/settings";
 import { request } from "./reqwest";
 import type { TestEndpointResponse } from "./reqwest";
@@ -29,7 +29,7 @@ export interface PendingDto {
   last_error: Option<string>;
   created_at: UnixEpochSeconds;
   /* tag names queued with this URL (server-authoritative) */
-  tags: Array<ApiTag>;
+  tags: Vec<ApiTag>;
 }
 
 export interface PendingInStorage {

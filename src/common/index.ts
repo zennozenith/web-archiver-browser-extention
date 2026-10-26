@@ -28,5 +28,5 @@ export async function sha256(input: string | Blob | File | Response): Promise<st
   const buf =
     typeof input === "string" ? new TextEncoder().encode(input) : await input.arrayBuffer();
   const d = await crypto.subtle.digest("SHA-256", buf);
-  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return [...new Uint8Vec(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }

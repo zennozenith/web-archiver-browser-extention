@@ -1,6 +1,6 @@
 import type { Logger } from "./logger.ts";
 import { log as genericLogger } from "./log.ts";
-import { NonEmptyArray } from "./types.ts";
+import { NonEmptyVec } from "./types.ts";
 
 export interface Ok<T> {
   ok: true;
@@ -9,8 +9,8 @@ export interface Ok<T> {
 
 export interface Err {
   ok: false;
-  messages: NonEmptyArray<string>;
-  extra: Array<unknown>;
+  messages: NonEmptyVec<string>;
+  extra: Vec<unknown>;
 }
 
 export type Result<T> = Ok<T> | Err;

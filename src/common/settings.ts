@@ -31,7 +31,7 @@ export interface ExtensionSettings {
   showBadge: boolean;
   theme: "auto" | "light" | "dark";
   sensitiveHeaders: Set<string>;
-  defaultTags: Array<IdLessTag>;
+  defaultTags: Vec<IdLessTag>;
 }
 
 export interface Endpoint {
@@ -54,7 +54,7 @@ export interface Configured {
   pendingLimit: number;
   logLevel: LevelSetting;
   sensitiveHeaders: Set<string>;
-  defaultTags: Array<IdLessTag>;
+  defaultTags: Vec<IdLessTag>;
 }
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {

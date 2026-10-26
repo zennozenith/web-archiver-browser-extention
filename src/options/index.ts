@@ -175,8 +175,8 @@ function fillForm(extentionSettings: ExtensionSettings): void {
   inputIncludeRequestHeaders.checked = extentionSettings.includeRequestHeaders;
   inputIncludeResponseHeaders.checked = extentionSettings.includeResponseHeaders;
   inputIncludeSensitiveHeaders.checked = extentionSettings.includeSensitiveHeaders;
-  inputSensitiveHeaders.value = Array.from(extentionSettings.sensitiveHeaders).join(", ");
-  inputDefaultTags.value = Array.from(extentionSettings.defaultTags).join(", ");
+  inputSensitiveHeaders.value = Vec.from(extentionSettings.sensitiveHeaders).join(", ");
+  inputDefaultTags.value = Vec.from(extentionSettings.defaultTags).join(", ");
   inputRequestTimeoutSec.value = String(extentionSettings.requestTimeoutSec);
   inputAutoCheck.checked = extentionSettings.autoCheck;
   inputPendingRefreshMinutes.value = String(extentionSettings.pendingRefreshMinutes);

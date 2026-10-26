@@ -3,7 +3,7 @@ import type { Int, Int64, Url } from "./types.ts";
 import { log as rootLog } from "./log.ts";
 import { Result } from "./error.ts";
 import { Configured, Endpoint } from "./settings.ts";
-import { ApiSuccessArchiveResponse, ArchiveStatus } from "@src/background/archive.ts";
+import { ApiArchiveResponse, ArchiveStatus } from "@src/background/archive.ts";
 import { PendingDto, PendingInStorage } from "@src/background/pending.ts";
 import { TestEndpointResponse } from "@src/background/reqwest.ts";
 import { ApiTag, IdLessTag } from "@src/background/tags.ts";
@@ -30,17 +30,17 @@ export interface MessageMap {
     data: PendingDto;
   };
   ARCHIVE_TAB: {
-    payload: { tabId: Int; tags: Array<IdLessTag> };
+    payload: { tabId: Int; tags: Vec<IdLessTag> };
     data: {
-      response: ApiSuccessArchiveResponse;
+      response: ApiArchiveResponse;
       warnings: string[];
     };
   };
-  SET_SITE_TAGS: { payload: { url: Url; tags: Array<IdLessTag> }; data: Array<IdLessTag> };
+  SET_SITE_TAGS: { payload: { url: Url; tags: Vec<IdLessTag> }; data: Vec<IdLessTag> };
   REFRESH_PENDING: { payload: undefined; data: { ok: boolean } };
   OPEN_AND_ARCHIVE: { payload: { url: Url; tags?: string[] }; data: void };
   ARCHIVE_FROM_PAGE: {
-    payload: { tags: Array<IdLessTag> };
+    payload: { tags: Vec<IdLessTag> };
     data: ArchiveStatus;
   };
 }
@@ -96,8 +96,8 @@ function isMessageResponse<D>(value: unknown): value is Result<D> {
   return (
     v.ok === true ||
     (v.ok === false &&
-      Array.isArray(v.extra) &&
-      Array.isArray(v.messages) &&
+      Vec.isVec(v.extra) &&
+      Vec.isVec(v.messages) &&
       v.messages.length > 0 &&
       v.messages.every((el): el is string => typeof el === "string"))
   );

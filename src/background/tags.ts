@@ -35,12 +35,12 @@ export interface ApiTagsListResponse {
 export interface ApiSiteTagsResponse {
   success: true;
   url: Url;
-  tags: Array<ApiTag>;
+  tags: Vec<ApiTag>;
 }
 
 /** All tags known to the server, with usage counts (where used: suggestions/autocomplete). */
 export async function listTags({ timeoutMs = 20000 }: { timeoutMs?: number } = {}): Promise<
-  Result<Array<ApiTag>>
+  Result<Vec<ApiTag>>
 > {
   const settings = await getExtentionSettings();
   const endpoint = getEndpoint(settings);
@@ -65,9 +65,9 @@ export async function listTags({ timeoutMs = 20000 }: { timeoutMs?: number } = {
 /** Replace the tag set of a website. Unknown tag names are created server-side. */
 export async function setSiteTags(
   url: Url,
-  tags: Array<IdLessTag>,
+  tags: Vec<IdLessTag>,
   { timeoutMs = 20000 }: { timeoutMs?: number } = {},
-): Promise<Result<Array<ApiTag>>> {
+): Promise<Result<Vec<ApiTag>>> {
   const settings = await getExtentionSettings();
   const endpoint = getEndpoint(settings);
   if (!endpoint.sitesTags) {
