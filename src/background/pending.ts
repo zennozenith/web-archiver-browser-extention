@@ -1,9 +1,9 @@
 import browser from "webextension-polyfill";
 
-import { createError, type Result } from "@common/error";
+import { ok, err } from "@common/error";
 import { bgRootlog as log } from "@common/log";
 import type { UrlStr, Option, Int64, Page, Vec } from "@common/types";
-import { getExtensionSettings, isServerConfigured } from "@common/settings";
+import { errorIfServerUnconfigured, getExtensionSettings } from "@common/settings";
 import { request } from "./reqwest";
 import type { TestEndpointResponse } from "./reqwest";
 import { TagDto } from "./tags";
@@ -42,21 +42,15 @@ export interface PendingInStorage {
 
 /** Fetch the server's pending queue and cache the result in
  *  browser.storage.local ("pending"). */
-export async function refreshPending(): Promise<{ ok: boolean } | null> {
-  const extensionSettings = await getExtensionSettings();
-  if (!isServerConfigured(extensionSettings)) {
-    log.debug("Server is not configured, refresh skipped");
-    return null;
-  }
+export async function refreshPending() {
+  const { serverUrl, token } = await getExtensionSettings();
+  const [_, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
+  if (serverUnconfigured !== null) return err(serverUnconfigured);
 
-  console.table(extensionSettings.serverUrl);
-  const res = await request<Page<PendingDto>>(
-    createUrl(extensionSettings.serverUrl, "/api/pending"),
-    {
-      token: extensionSettings.token,
-      timeoutMs: 20000,
-    },
-  );
+  const [res, resError] = await request<Page<PendingDto>>(createUrl(serverUrl, "/api/pending"), {
+    token,
+    timeoutMs: 20000,
+  });
 
   let previous: PendingInStorage | null = null;
   try {
@@ -67,11 +61,11 @@ export async function refreshPending(): Promise<{ ok: boolean } | null> {
   } catch {}
 
   let data: PendingInStorage;
-  if (res.ok) {
+  if (res !== null) {
     data = {
       fetchedAt: nowUnixEpochSeconds(),
-      total: res.data.items.length,
-      items: res.data.items,
+      total: res.items.length,
+      items: res.items,
     };
   } else {
     // Keep the last good list, surface the error to the popup.
@@ -79,39 +73,34 @@ export async function refreshPending(): Promise<{ ok: boolean } | null> {
       fetchedAt: nowUnixEpochSeconds(),
       total: previous?.total ?? 0,
       items: previous?.items ?? [],
-      error: res.messages.toString(),
+      error: resError.detail,
     };
   }
   await browser.storage.local.set({ pending: data });
 
-  log[res.ok ? "debug" : "warn"]("Pending refresh", { ok: res.ok, total: data.total });
-  return { ok: res.ok };
+  log[res !== null ? "debug" : "warn"]("Pending refresh", { total: data.total });
+  return ok(null);
 }
 
 /** Add an URL (with optional queued tags) to the server's pending queue. */
 export async function addPending(
   url: UrlStr,
   { title, tags }: { title?: string; tags?: string[] } = {},
-): Promise<Result<PendingDto>> {
-  const extensionSettings = await getExtensionSettings();
-  if (!isServerConfigured(extensionSettings)) {
-    log.debug("Server is not configured, cannot add pending");
-    return createError({
-      logger: log,
-      message: "Server is not configured. Open the extension preferences.",
-    });
-  }
+) {
+  const { serverUrl, token } = await getExtensionSettings();
+  const [_, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
+  if (serverUnconfigured !== null) return err(serverUnconfigured);
 
-  const res = await request<PendingDto>(createUrl(extensionSettings.serverUrl, "/api/pending"), {
+  const res = await request<PendingDto>(createUrl(serverUrl, "/api/pending"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url, title, tags }),
-    token: extensionSettings.token,
+    token,
     timeoutMs: 20000,
   });
 
-  if (res.ok) {
-    log.debug("Pending tags created", { id: res.data.id, url, tags });
+  if (res[0] !== null) {
+    log.debug("Pending tags created", { id: res[0].id, url, tags });
   }
 
   return res;
@@ -119,19 +108,19 @@ export async function addPending(
 
 /** GET /api/pending — used for the endpoint test. */
 export async function testPending(pendingUrl: URL, token?: string) {
-  const res = await request<Page<PendingDto>>(createUrl(pendingUrl, "/api/pending"), {
+  const [res, error] = await request<Page<PendingDto>>(createUrl(pendingUrl, "/api/pending"), {
     token,
     timeoutMs: 20000,
   });
 
-  if (!res.ok) {
+  if (error) {
     return {
       ok: false,
-      text: `pending ✗ ${res.messages.toString()}`,
+      text: `pending ✗ ${error.detail}`,
     } satisfies TestEndpointResponse;
   }
   return {
     ok: true,
-    text: `pending ✓ (${res.data.items.length} item(s))`,
+    text: `pending ✓ (${res.items.length} item(s))`,
   } satisfies TestEndpointResponse;
 }

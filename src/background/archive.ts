@@ -1,17 +1,13 @@
 import { WebRequest } from "webextension-polyfill";
 import browser from "webextension-polyfill";
 
-import { createError, createOk, isStandardError, type Result } from "@common/error";
+import { err, ok, isStandardError, wrapErr } from "@common/error";
 import { bgRootlog } from "@common/log";
 import { request, TestEndpointResponse } from "./reqwest";
 import { Int, Int64, UrlStr, Option, Vec } from "@common/types";
 import { session_storage_delete, session_storage_get, session_storage_set } from "@common/storage";
-import {
-  errorIfServerUnconfigured,
-  getExtensionSettings,
-  isServerConfigured,
-} from "@common/settings";
-import { canonicalizeUrl, createUrl, extractTabUrl, isArchivable, sha256 } from "@common/index";
+import { errorIfServerUnconfigured, getExtensionSettings } from "@common/settings";
+import { canonicalizeUrl, createUrl, extractTabUrl, sha256 } from "@common/index";
 import type { TagDto, IdLessTag } from "./tags";
 import { Screenshot, takeScreenshot } from "./screenshot";
 import { injectBanner } from "./browser-scripting";
@@ -71,27 +67,35 @@ export interface ApiPageDetail extends ApiPageDto {
   latestCapture: ApiCaptureSummary;
 }
 
-// interface ArchiveErrorStatus {
-//   state: "error" | "unsupported" | "unconfigured";
-//   url: UrlStr;
-//   error: string;
-//   checkedAt: number;
-// }
-
-// export interface ArchiveOkStatus extends ApiPageDetail {
-//   state: "ok";
-//   checkedAt: number;
-// }
-
-// export type ArchiveStatus = ArchiveOkStatus | ArchiveErrorStatus;
-
-// export interface ArchiveOkStatus extends ApiPageDetail {
-//   state: "ok";
-//   checkedAt: number;
-// }
-
 const busyTabs = new Set<Int>();
-const inflight = new Map<string, Promise<Result<ApiPageDetail | null>>>();
+
+const inflight = new Map<
+  string,
+  Promise<
+    | [
+        null,
+        {
+          reason: "reqwest_generic";
+          detail: string;
+        },
+      ]
+    | [
+        null,
+        {
+          reason: "reqwest_response_not_json";
+          detail: string;
+        },
+      ]
+    | [
+        null,
+        {
+          reason: "reqwest_response";
+          detail: string;
+        },
+      ]
+    | [ApiPageDetail | null, null]
+  >
+>();
 const sleep = (ms: Int) => new Promise((resolve) => setTimeout(resolve, ms));
 const headerMemory = new Map<Int, Partial<HeadersDetails>>();
 
@@ -158,19 +162,29 @@ export function patchHeaders(tabId: Int, requestId: string, patch: Partial<Heade
   session_storage_set(`hdr:${tabId}`, next).catch(() => {});
 }
 
-async function archiveTab(
-  tabId: Int,
-  { tags }: { tags?: Vec<IdLessTag> } = {},
-): Promise<
-  Result<{
-    response: ApiArchiveResponse;
-    warnings: string[];
-  }>
-> {
+async function archiveTab(tabId: Int, { tags }: { tags?: Vec<IdLessTag> } = {}) {
+  const {
+    serverUrl,
+    token,
+    includeScreenshot,
+    includeSensitiveHeaders,
+    screenshotFormat,
+    fullPageScreenshot,
+    jpegQuality,
+    includeResponseHeaders,
+    requestTimeoutSec,
+  } = await getExtensionSettings();
+  const [_, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
+  if (serverUnconfigured !== null) return err(serverUnconfigured);
+
+  const [url, error] = await extractTabUrl(tabId, log);
+  if (error) return wrapErr(error);
+
   if (busyTabs.has(tabId)) {
-    return createError({
+    return err({
       logger: log,
-      message: "An archive is already in progress for this tab",
+      reason: "archive_already_in_progress",
+      detail: "An archive is already in progress for this tab",
       extra: { tabId },
     });
   }
@@ -181,26 +195,7 @@ async function archiveTab(
   try {
     await session_storage_delete(`archiveError:${tabId}`);
 
-    const extensionSettings = await getExtensionSettings();
-    if (!isServerConfigured(extensionSettings)) {
-      log.debug("Server is not configured");
-      return createError({
-        logger: log,
-        message: "Server is not configured. Open the extension preferences.",
-      });
-    }
-
     const tab = await browser.tabs.get(tabId);
-    const url = tab.url;
-
-    if (url === undefined || !isArchivable(url)) {
-      return createError({
-        logger: log,
-        message: "Only http(s) pages can be archived.",
-        extra: { url: tab.url },
-      });
-    }
-
     log.info("Archiving page", { tabId, url, title: tab.title });
 
     await updateBadge({
@@ -216,29 +211,39 @@ async function archiveTab(
       results = await browser.scripting.executeScript({ target: { tabId }, func: collectPage });
     } catch (e) {
       const errorMessage = isStandardError(e) ? e.message : e;
-      return createError({
+      return err({
         logger: log,
-        message: `Could not read the page (${errorMessage}). If this is Firefox, make sure site access is granted in the preferences.`,
+        reason: "execute_script_collect_page",
+        detail: `Could not read the page (${errorMessage}). If this is Firefox, make sure site access is granted in the preferences.`,
       });
     }
     doneCollect(`fetch ${results?.[0]?.result ? "ok" : "empty"}`);
     const page = results?.[0]?.result as Page | undefined;
     if (!page) {
-      return createError({
+      return err({
         logger: log,
-        message: "Could not read the page content.",
+        reason: "page_content_undefined",
+        detail: "Could not read the page content.",
       });
     }
 
     const warnings: string[] = [];
-    let maybeScreenshot: Result<Screenshot> | null = null;
+    let maybeScreenshot: Screenshot | null = null;
 
-    if (extensionSettings.includeScreenshot) {
+    if (includeScreenshot) {
       const doneShot = log.time("screenshot");
-      maybeScreenshot = await takeScreenshot({ tab, extensionSettings, page, warnings });
-      if (maybeScreenshot.ok === true) {
-        doneShot(maybeScreenshot.data.ext, maybeScreenshot.data.blob.size);
+      const [shot, error] = await takeScreenshot({
+        tab,
+        page,
+        screenshotFormat,
+        fullPageScreenshot,
+        jpegQuality,
+        warnings,
+      });
+      if (error === null) {
+        doneShot(shot.ext, shot.blob.size);
       }
+      maybeScreenshot = shot;
     }
 
     const headers = await getHeadersWithDetails(tabId);
@@ -270,24 +275,18 @@ async function archiveTab(
         ? {
             method: headers.method || "GET",
             url: headers.url,
-            headers: await headersToObject(
-              headers.requestHeaders,
-              extensionSettings.includeSensitiveHeaders,
-            ),
+            headers: await headersToObject(headers.requestHeaders, includeSensitiveHeaders),
           }
         : null,
       response:
-        headers && extensionSettings.includeResponseHeaders
+        headers && includeResponseHeaders
           ? {
               statusCode: headers.statusCode ?? null,
               statusLine: headers.statusLine ?? null,
-              headers: await headersToObject(
-                headers.responseHeaders,
-                extensionSettings.includeSensitiveHeaders,
-              ),
+              headers: await headersToObject(headers.responseHeaders, includeSensitiveHeaders),
             }
           : null,
-      sensitiveHeadersRedacted: !extensionSettings.includeSensitiveHeaders,
+      sensitiveHeadersRedacted: !includeSensitiveHeaders,
       extension: {
         name: browser.runtime.getManifest().name,
         version: browser.runtime.getManifest().version,
@@ -296,12 +295,12 @@ async function archiveTab(
       files: {
         html: { name: "page.html", size: htmlBlob.size, sha256: await sha256(htmlBlob) },
         screenshot:
-          maybeScreenshot?.ok === true
+          maybeScreenshot !== null
             ? {
-                name: `screenshot.${maybeScreenshot.data.ext}`,
-                size: maybeScreenshot.data.blob.size,
-                sha256: await sha256(maybeScreenshot.data.blob),
-                format: maybeScreenshot.data.format,
+                name: `screenshot.${maybeScreenshot.ext}`,
+                size: maybeScreenshot.blob.size,
+                sha256: await sha256(maybeScreenshot.blob),
+                format: maybeScreenshot.format,
               }
             : null,
       },
@@ -310,20 +309,16 @@ async function archiveTab(
 
     const formData = new FormData();
     formData.append("html", htmlBlob);
-    formData.append("url", url);
+    formData.append("url", canonicalizeUrl(url));
     formData.append("title", title);
 
     if (tags?.length) {
       formData.append("tags", JSON.stringify(tags.map((v) => v.name)));
     }
 
-    if (maybeScreenshot?.ok) {
-      formData.append("screenshot-format", maybeScreenshot.data.format);
-      formData.append(
-        "screenshot",
-        maybeScreenshot.data.blob,
-        `screenshot.${maybeScreenshot.data.ext}`,
-      );
+    if (maybeScreenshot !== null) {
+      formData.append("screenshot-format", maybeScreenshot.format);
+      formData.append("screenshot", maybeScreenshot.blob, `screenshot.${maybeScreenshot.ext}`);
     }
     formData.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
     // Includes tags queued via the pending queue (created server-side if unknown).
@@ -331,32 +326,33 @@ async function archiveTab(
     log.info("Uploading archive", {
       url: pageUrl,
       htmlBytes: htmlBlob.size,
-      screenshotBytes: maybeScreenshot?.ok ? maybeScreenshot.data.blob.size : null,
+      screenshotBytes: maybeScreenshot !== null ? maybeScreenshot.blob.size : null,
     });
 
-    const result = await request<ApiArchiveResponse>(
-      createUrl(extensionSettings.serverUrl, "/api/archive"),
+    const [response, error] = await request<ApiArchiveResponse>(
+      createUrl(serverUrl, "/api/archive"),
       {
         method: "POST",
         body: formData,
-        token: extensionSettings.token,
-        timeoutMs: (Number(extensionSettings.requestTimeoutSec) || 120) * 1000,
+        token,
+        timeoutMs: (Number(requestTimeoutSec) || 120) * 1000,
       },
     );
 
-    if (result.ok === false) {
-      return result;
+    if (error) {
+      return wrapErr(error);
     }
 
-    return createOk({
-      response: result.data,
+    return ok({
+      response,
       warnings,
     });
   } catch (e) {
     log.error("Archive request failed", e);
-    return createError({
+    return err({
       logger: log,
-      message: "Archive request failed",
+      reason: "archive_failed",
+      detail: "Archive request failed",
       extra: e,
     });
   } finally {
@@ -368,20 +364,15 @@ async function archiveTab(
 export async function archiveWithFeedback(
   tabId: Int,
   { toast, tags }: { toast: boolean; tags?: Vec<IdLessTag> },
-): Promise<
-  Result<{
-    response: ApiArchiveResponse;
-    warnings: string[];
-  }>
-> {
+) {
   try {
-    const result = await archiveTab(tabId, { tags });
-    if (result.ok === false) {
-      return result;
+    const [res, error] = await archiveTab(tabId, { tags });
+    if (error !== null) {
+      return wrapErr(error);
     }
 
     if (toast) {
-      const n = result.data.response.version;
+      const n = res.response.version;
       log.error(`Archived ✓${n ? ` (${n} version${n === 1 ? "" : "s"})` : ""}`);
       injectBanner(tabId, {
         mode: "toast",
@@ -389,7 +380,7 @@ export async function archiveWithFeedback(
         text: `Archived ✓${n ? ` (${n} version${n === 1 ? "" : "s"})` : ""}`,
       });
     }
-    return createOk(result.data);
+    return ok(res);
   } catch (e) {
     const errorMessage = isStandardError(e) ? e.message : String(e);
     log.error("Archive failed", errorMessage, e);
@@ -412,25 +403,27 @@ export async function archiveWithFeedback(
         text: `Archive failed: ${errorMessage}`,
       });
 
-    return createError({
+    return err({
+      reason: "archive_failed",
       logger: log,
-      message: errorMessage,
+      detail: errorMessage,
       extra: e,
     });
   }
 }
 
+export type PageLookup = Awaited<ReturnType<typeof pageLookup>>;
+
 /**
  * Returns Result<null> if no page found for given lookup url
  */
-export async function pageLookup(tabId: Int): Promise<Result<ApiPageDetail | null>> {
+export async function pageLookup(tabId: Int) {
   const { serverUrl, token } = await getExtensionSettings();
-  const serverUnconfigured = errorIfServerUnconfigured({ serverUrl }, log);
-  if (serverUnconfigured !== null) return serverUnconfigured;
+  const [_, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
+  if (serverUnconfigured !== null) return err(serverUnconfigured);
 
-  const urlResult = await extractTabUrl(tabId, log);
-  if (!urlResult.ok) return urlResult;
-  let urlToLookUp = urlResult.data;
+  const [urlToLookUp, error] = await extractTabUrl(tabId, log);
+  if (error) return wrapErr(error);
 
   const url = canonicalizeUrl(urlToLookUp);
   const urlShaHash = await sha256(url);
@@ -442,7 +435,7 @@ export async function pageLookup(tabId: Int): Promise<Result<ApiPageDetail | nul
     return status;
   }
 
-  const inflightStatusPromise: Promise<Result<ApiPageDetail | null>> = (async () => {
+  const inflightStatusPromise = (async () => {
     logArchiveStatus.debug("Checking archive status", { url: url });
 
     const done = logArchiveStatus.time("status check");
@@ -451,17 +444,17 @@ export async function pageLookup(tabId: Int): Promise<Result<ApiPageDetail | nul
     reqUrl.searchParams.set("url", url);
 
     // TODO: check what is returned if page not found
-    let pageResult = await request<ApiPageDetail | null>(reqUrl, {
+    let result = await request<ApiPageDetail | null>(reqUrl, {
       token,
       timeoutMs: 20000,
     });
     done();
 
-    logArchiveStatus[pageResult.ok ? "debug" : "warn"](pageResult);
+    logArchiveStatus[error ? "warn" : "debug"](result);
 
-    await session_storage_set(`status:${urlShaHash}`, pageResult);
+    await session_storage_set(`status:${urlShaHash}`, result);
 
-    return pageResult;
+    return result;
   })().finally(() => inflight.delete(key));
 
   inflight.set(key, inflightStatusPromise);
@@ -499,8 +492,8 @@ export async function handleOpened(tabId: Int) {
     // Prompt mode: offer a tag chip row (site's current/default tags, preselected)
     // before confirming; chosen tags are sent with ARCHIVE_FROM_PAGE.
     const defaults = mergeTagNames(Vec.from(defaultTags), opened?.tags ?? []);
-    const status = await pageLookup(tabId);
-    const siteTags = status.ok === true && status.data ? status.data.tags : [];
+    const [page, error] = await pageLookup(tabId);
+    const siteTags = error === null && page ? page.tags : [];
     injectBanner(tabId, {
       kind: "",
       mode: "prompt",
@@ -530,19 +523,19 @@ export async function testPageStatus(
 
   const reqUrl = createUrl(url, "/api/pages/lookup");
   reqUrl.searchParams.set("url", queryUrl);
-  const responseData = await request<ApiPageDetail>(reqUrl, {
+  const [response, error] = await request<ApiPageDetail>(reqUrl, {
     token,
     timeoutMs: 20000,
   });
 
-  if (!responseData.ok) {
+  if (error) {
     return {
       ok: false,
-      text: `page check ✗ ${responseData.messages.toString()}`,
+      text: `page check ✗ ${error.detail}`,
     };
   }
   return {
     ok: true,
-    text: `page check ✓ [for "${queryUrl}" ${responseData.data.captureCount} capture(s)]`,
+    text: `page check ✓ [for "${queryUrl}" ${response.captureCount} capture(s)]`,
   };
 }

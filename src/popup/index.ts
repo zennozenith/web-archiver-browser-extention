@@ -101,8 +101,8 @@ class CurrentPage {
   // private isArchivable: boolean = false;
 
   constructor(tab: chrome.tabs.Tab, pageResult: Result<ApiPageDetail | null>) {
-    const isArchivable = pageResult.ok;
-    const page = pageResult.ok ? pageResult.data : null;
+    const isArchivable = pageResult[1] === null;
+    const [page, error] = pageResult;
 
     this.unarchivable.classList.toggle("hidden", isArchivable);
     this.meta.classList.toggle("hidden", !isArchivable);
@@ -115,9 +115,9 @@ class CurrentPage {
     this.url.textContent = page?.url || tab.url || "No Url";
     this.url.title = page?.url || tab.url || "No Url";
 
-    if (!pageResult.ok) {
+    if (error) {
       this.statusPill.className = "pill err";
-      this.statusPill.textContent = pageResult.messages.toString();
+      this.statusPill.textContent = error.detail;
 
       this.errorContainer.innerHTML = "";
       // this.errorContainer.appendChild(errorBox(archiveStatus.error));
@@ -144,20 +144,20 @@ document.addEventListener("DOMContentLoaded", async () => {
   //     (await browser.commands.getAll()).find((c) => c.name === "archive-page")?.shortcut || "";
   // } catch {}
   //
-  const storageExtensionSettingsResult = await sendToBackground("GET_EXTENSION_SETTINGS");
+  const [storageExtensionSettings, error] = await sendToBackground("GET_EXTENSION_SETTINGS");
 
-  if (!storageExtensionSettingsResult.ok) {
+  if (error) {
     // TODO:
     return;
   }
 
-  const extensionSettingResult = settingsFromStorageSetting(storageExtensionSettingsResult.data);
-  if (!extensionSettingResult.ok) {
+  const [extensionSetting, error2] = settingsFromStorageSetting(storageExtensionSettings);
+  if (error2) {
     // TODO:
     return;
   }
 
-  const { serverUrl } = extensionSettingResult.data;
+  const { serverUrl } = extensionSetting;
 
   Notice.init({
     hasPermission,
@@ -171,7 +171,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   const pageLookupResult = await sendToBackground("PAGE_LOOKUP", { tabId: tab.id });
 
-  if (!pageLookupResult.ok) {
+  if (pageLookupResult[1]) {
     // TODO: handle error
   }
   new CurrentPage(tab, pageLookupResult);
@@ -189,7 +189,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 // import { isArchivable } from "@common/index";
 // import { log as rootLog } from "@common/log";
 // import { ApiTag, IdLessTag } from "@src/background/tags";
-// import { createOk, Result } from "@common/error";
+// import { ok, Result } from "@common/error";
 // import { ExtensionSettings } from "@common/settings";
 // const log = rootLog.child("popup");
 
@@ -206,10 +206,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 //   "render:tags": { archiveStatus: ArchiveOkStatus | null };
 //   "tags:set": { url: Url; tags: Array<IdLessTag> };
 //   "tags:set:ok": { tags: Array<IdLessTag> };
-//   "tags:set:error": { message: string };
+//   "tags:set:error": { detail: string };
 //   /* Seed a not-yet-archived site with the user's default tags (once per URL). */
 //   "tags:seed:defaults": { url: Url; existing: Array<IdLessTag> };
-//   "error:any": { message: string };
+//   "error:any": { detail: string };
 //   "error:any:clear": void;
 // }
 
@@ -259,8 +259,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 // async function setExtensionSetting(): Promise<boolean> {
 //   const extensionSettingsResult = await sendToBackground("GET_EXTENSION_SETTINGS");
 //   if (!extensionSettingsResult.ok) {
-//     log.error("Cannot get state,", extensionSettingsResult.messages.toString());
-//     UiError.any(extensionSettingsResult.messages.toString());
+//     log.error("Cannot get state,", extensionSettingsResult.detail);
+//     UiError.any(extensionSettingsResult.detail);
 //     return false;
 //   }
 
@@ -343,7 +343,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 //   //   const tagsResult = await sendToBackground("GET_KNOWN_TAGS");
 
 //   //   if (!tagsResult.ok) {
-//   //     log.debug("Cannot load tag suggestions,", tagsResult.messages.toString());
+//   //     log.debug("Cannot load tag suggestions,", tagsResult.detail);
 //   //     return;
 //   //   }
 
@@ -398,8 +398,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 //   //   const result = await sendToBackground("SET_SITE_TAGS", { url, tags });
 //   //   if (result.ok === false) {
-//   //     log.error("Cannot save tags,", result.messages.toString());
-//   //     uiBus.emit("tags:set:error", { message: result.messages.toString() });
+//   //     log.error("Cannot save tags,", result.detail);
+//   //     uiBus.emit("tags:set:error", { detail: result.detail });
 //   //     // Allow the default-tags seeding to retry on the next status check.
 //   //     defaultsSeeded.clear();
 //   //     renderTagChips();
@@ -441,7 +441,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 //     return errDiv;
 //   }
 
-//   static any(message: string) {}
+//   static any(detail: string) {}
 // }
 
 // class Pending {
@@ -470,8 +470,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 //   static async get() {
 //     const pendingResult = await sendToBackground("GET_PENDING");
 //     if (pendingResult.ok === false) {
-//       log.error("Cannot get pending, ", pendingResult.messages.toString());
-//       uiBus.emit("error:any", { message: pendingResult.messages.toString() });
+//       log.error("Cannot get pending, ", pendingResult.detail);
+//       uiBus.emit("error:any", { detail: pendingResult.detail });
 
 //       // TODO: move error render in seperate event
 //       currentStatusPill.className = "pill err";
@@ -548,8 +548,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 //             .filter(Boolean);
 //           const result = await sendToBackground("SET_PENDING_TAGS", { id: it.id, tags: next });
 //           if (result.ok === false) {
-//             log.error("Cannot save pending tags,", result.messages.toString());
-//             uiBus.emit("error:any", { message: result.messages.toString() });
+//             log.error("Cannot save pending tags,", result.detail);
+//             uiBus.emit("error:any", { detail: result.detail });
 //             return;
 //           }
 //           await sendToBackground("REFRESH_PENDING");
@@ -648,10 +648,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 //     });
 
 //     if (archiveResult.ok === false) {
-//       log.error("Archive failed, ", archiveResult.messages.toString());
-//       uiBus.emit("error:any", { message: archiveResult.messages.toString() });
+//       log.error("Archive failed, ", archiveResult.detail);
+//       uiBus.emit("error:any", { detail: archiveResult.detail });
 //       uiBus.emit("render:archive:error", {
-//         errorMessage: archiveResult.messages.toLocaleString() || "Unknown error",
+//         errorMessage: archiveResult.details.toLocaleString() || "Unknown error",
 //       });
 
 //       return;
@@ -677,8 +677,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 //   const archiveStatusResult = await sendToBackground("GET_ARCHIVE", { tabId: tab.id });
 //   if (archiveStatusResult.ok === false) {
-//     log.error("Cannot get archive status, ", archiveStatusResult.messages.toString());
-//     uiBus.emit("error:any", { message: archiveStatusResult.messages.toString() });
+//     log.error("Cannot get archive status, ", archiveStatusResult.detail);
+//     uiBus.emit("error:any", { detail: archiveStatusResult.detail });
 //     return;
 //   }
 
@@ -714,8 +714,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 //   errorAnyEl.classList.add("hidden");
 // });
 
-// uiBus.on("error:any", ({ message }) => {
-//   errorAnyEl.textContent = message;
+// uiBus.on("error:any", ({ detail }) => {
+//   errorAnyEl.textContent = detail;
 //   errorAnyEl.classList.remove("hidden");
 // });
 
@@ -884,10 +884,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 //   });
 // });
 
-// uiBus.on("tags:set:error", ({ message }) => {
+// uiBus.on("tags:set:error", ({ detail }) => {
 //   currentTagsError.innerHTML = "";
 //   currentTagsError.appendChild(
-//     errorBox(`Tags: ${message}`, () => {
+//     errorBox(`Tags: ${detail}`, () => {
 //       currentTagsError.innerHTML = "";
 //     }),
 //   );
@@ -903,8 +903,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 // //   const result = await sendToBackground("SET_SITE_TAGS", { url, tags });
 // //   if (result.ok === false) {
-// //     log.error("Cannot save tags,", result.messages.toString());
-// //     uiBus.emit("tags:set:error", { message: result.messages.toString() });
+// //     log.error("Cannot save tags,", result.detail);
+// //     uiBus.emit("tags:set:error", { detail: result.detail });
 // //     // Allow the default-tags seeding to retry on the next status check.
 // //     defaultsSeeded.clear();
 // //     renderTagChips();

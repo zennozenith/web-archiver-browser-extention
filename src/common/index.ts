@@ -1,6 +1,6 @@
 import browser from "webextension-polyfill";
 import { Int } from "./types";
-import { createError, createOk, Result } from "./error";
+import { err, ok } from "./error";
 import { Logger } from "./logger";
 
 /* ---------- helpers ---------- */
@@ -73,41 +73,45 @@ export function createUrl(base: URL, pathname: string): URL {
   return url;
 }
 
-export async function extractTabUrl(tabId: Int, logger: Logger): Promise<Result<URL>> {
+export async function extractTabUrl(tabId: Int, logger: Logger) {
   let tab: browser.Tabs.Tab;
   try {
     tab = await browser.tabs.get(tabId);
   } catch (e) {
-    return createError({
+    return err({
       logger,
-      message: `Cannot check tab with id: ${tabId}`,
+      reason: "no_tab_id",
+      detail: `Cannot check tab with id: ${tabId}`,
       extra: e,
     });
   }
   if (!tab.url) {
-    return createError({
+    return err({
       logger,
-      message: `Cannot extract url from tab with id: ${tabId}`,
+      reason: "no_tab_url",
+      detail: `Cannot extract url from tab with id: ${tabId}`,
     });
   }
 
   const url = URL.parse(tab.url);
   if (!url) {
-    return createError({
+    return err({
       logger,
-      message: `Extract tab url:${tab.url} from tab with id: ${tabId} is not a valid URL`,
+      reason: "tab_url_parse",
+      detail: `Extract tab url:${tab.url} from tab with id: ${tabId} is not a valid URL`,
     });
   }
 
   if (!isArchivable(url)) {
-    return createError({
+    return err({
       logger,
-      message: `URL not archivable: ${url.toString()}`,
+      reason: "tab_url_unarchivable",
+      detail: `URL not archivable: ${url.toString()}`,
       extra: {
         checkedAt: Date.now(),
       },
     });
   }
 
-  return createOk(url);
+  return ok(url);
 }

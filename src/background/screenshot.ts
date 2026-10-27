@@ -1,4 +1,4 @@
-import { createError, createOk, isStandardError, Result } from "@common/error";
+import { err, ok, isStandardError } from "@common/error";
 import browser from "webextension-polyfill";
 import { bgRootlog } from "@common/log";
 import { ExtensionSettings } from "@common/settings";
@@ -14,24 +14,28 @@ export interface Screenshot {
 
 export async function takeScreenshot({
   tab,
-  extensionSettings,
+  screenshotFormat,
+  fullPageScreenshot,
+  jpegQuality,
   page,
   warnings,
 }: {
   tab: browser.Tabs.Tab;
-  extensionSettings: ExtensionSettings;
+  screenshotFormat: ExtensionSettings["screenshotFormat"];
+  jpegQuality: ExtensionSettings["jpegQuality"];
+  fullPageScreenshot: ExtensionSettings["fullPageScreenshot"];
   page: Page;
   warnings: string[];
-}): Promise<Result<Screenshot>> {
-  const format = extensionSettings.screenshotFormat;
+}) {
+  const format = screenshotFormat;
   const opts: { format: ExtensionSettings["screenshotFormat"]; quality?: number } = { format };
-  if (format === "jpeg") opts.quality = Number(extensionSettings.jpegQuality) || 85;
+  if (format === "jpeg") opts.quality = Number(jpegQuality) || 85;
 
   let dataUrl;
 
   if (typeof browser.tabs.captureTab === "function") {
     // Firefox
-    if (extensionSettings.fullPageScreenshot) {
+    if (fullPageScreenshot) {
       try {
         dataUrl = await browser.tabs.captureTab(tab.id, {
           ...opts,
@@ -55,14 +59,15 @@ export async function takeScreenshot({
     // Chrome: only the visible tab can be captured
     if (!tab.active) {
       warnings.push("Screenshot skipped: tab is not in the foreground");
-      return createError({
+      return err({
         logger: log,
-        message: "Screenshot skipped: tab is not in the foreground",
+        reason: "tab_not_in_forground",
+        detail: "Screenshot skipped: tab is not in the foreground",
       });
     }
     dataUrl = await browser.tabs.captureVisibleTab(tab.windowId, opts);
   }
-  return createOk({
+  return ok<Screenshot>({
     blob: await (await fetch(dataUrl)).blob(),
     ext: format === "jpeg" ? "jpg" : "png",
     format,

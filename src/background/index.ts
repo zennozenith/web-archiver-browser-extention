@@ -1,6 +1,6 @@
 import browser from "webextension-polyfill";
 
-import { createOk, isStandardError, Result } from "@common/error";
+import { ok, Result, err } from "@common/error";
 import {
   archiveWithFeedback,
   deleteHeaderMemory,
@@ -85,8 +85,8 @@ browser.tabs.onActivated.addListener(async ({ tabId }) => {
 });
 
 browser.tabs.onRemoved.addListener(async (tabId) => {
-  const urlResult = await extractTabUrl(tabId, log);
-  let url = urlResult.ok ? canonicalizeUrl(urlResult.data) : "";
+  const [_url, _] = await extractTabUrl(tabId, log);
+  let url = _url ? canonicalizeUrl(_url) : "";
   const urlShaHash = await sha256(url);
 
   logWebReq.debug("Tab removed", { tabId });
@@ -207,13 +207,13 @@ export function registerHandlers(handlers: Handlers): void {
     return (async (): Promise<Result<unknown>> => {
       try {
         return await handler(raw.payload as never, sender);
-      } catch (err) {
-        logMsg.error(`message:${raw.type} handler failed`, err);
-        return {
-          ok: false,
-          messages: [isStandardError(err) ? err.message : String(err)],
-          extra: isStandardError(err) ? [] : [err],
-        };
+      } catch (e) {
+        return err({
+          logger: logMsg,
+          reason: "register_handler_unhandled_err",
+          detail: `message:${raw.type} handler failed`,
+          extra: e,
+        });
       }
     })();
   });
@@ -231,7 +231,7 @@ function isMessage(raw: unknown, handlers: Handlers): raw is Message {
 
 registerHandlers({
   GET_EXTENSION_SETTINGS: async () => {
-    return createOk(storageSettingsFromSetting(await getExtensionSettings()));
+    return ok(storageSettingsFromSetting(await getExtensionSettings()));
   },
   // TODO: better tests
   TEST_ENDPOINTS: async ({ serverUrl: _t, token: _a }) => {
@@ -240,7 +240,7 @@ registerHandlers({
       // testPending(endpoints.pending, token),
       // testPageStatus(endpoints.check, { token, queryUrl: "https://example.com/" }),
     ]);
-    return createOk(result);
+    return ok(result);
   },
   PAGE_LOOKUP: async ({ tabId }) => {
     const lookupResult = await pageLookup(tabId);
@@ -252,11 +252,11 @@ registerHandlers({
   //   const { pending } = (await browser.storage.local.get({ pending: null })) as {
   //     pending: PendingInStorage;
   //   };
-  //   return createOk<PendingInStorage>(pending);
+  //   return ok<PendingInStorage>(pending);
   // },
   // REFRESH_PENDING: async () => {
   //   const t = await refreshPending();
-  //   return createOk({ ok: t === null ? false : t.ok });
+  //   return ok({ ok: t === null ? false : t.ok });
   // },
   // // TODO: rename update pending
   // SET_PENDING_TAGS: async ({ id, tags }) => {
@@ -281,13 +281,13 @@ registerHandlers({
   //   // Optional tags ride along on the opened-tab flag; pending-queue tags merge
   //   // inside archiveTab regardless.
   //   await openAndArchive(url, tags ?? []);
-  //   return createOk(undefined);
+  //   return ok(undefined);
   // },
   // ARCHIVE_FROM_PAGE: async ({ tags }, sender) => {
   //   if (sender.tab?.id === undefined) {
-  //     return createError({
+  //     return err({
   //       logger: log,
-  //       message: "Tab id undefined in ARCHIVE_FROM_PAGE",
+  //       detail: "Tab id undefined in ARCHIVE_FROM_PAGE",
   //     });
   //   }
 

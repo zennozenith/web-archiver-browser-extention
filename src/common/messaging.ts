@@ -1,7 +1,7 @@
 import browser from "webextension-polyfill";
-import { Int, UrlStr, Vec } from "./types.ts";
+import { Int, UrlStr } from "./types.ts";
 import { log as rootLog } from "./log.ts";
-import { Result } from "./error.ts";
+import { Err, err, Result } from "./error.ts";
 import { TestEndpointResponse } from "@src/background/reqwest.ts";
 import { StorageExtensionSettings } from "./settings.ts";
 import { ApiPageDetail } from "@src/background/archive.ts";
@@ -60,43 +60,51 @@ type PayloadArgs<T extends MessageType> =
  * Sends a strongly-typed message to the background service worker/script.
  * `T` is inferred from `type`, so payload and return type are both checked.
  */
-export async function sendToBackground<T extends MessageType>(
-  type: T,
-  ...args: PayloadArgs<T>
-): Promise<Result<MessageData<T>>> {
+export async function sendToBackground<T extends MessageType>(type: T, ...args: PayloadArgs<T>) {
   const message = { type, payload: args[0] } as Message<T>;
   log.debug(`message:${type} →`, args[0]);
   try {
-    const response: unknown = await browser.runtime.sendMessage(message);
+    const response: Result<MessageData<T>> = await browser.runtime.sendMessage(message);
     if (!isMessageResponse<MessageData<T>>(response)) {
-      log.error(`message:${type} No/invalid response received`, response);
-      return { ok: false, messages: ["No response received"], extra: [] };
+      return err({
+        logger: log,
+        reason: "no_response",
+        detail: `message:${type} No/invalid response received`,
+        extra: { message },
+      });
     }
-    log.debug(`message:${type} ← ok`);
+    log.debug(`detail:${type} ← ok`);
     return response;
-  } catch (err) {
-    log.error(`message:${type} send failed`, err);
-    return {
-      ok: false,
-      messages: [err instanceof Error ? err.message : String(err)],
-      extra: [err instanceof Error ? err : {}],
-    };
+  } catch (e) {
+    return err({
+      logger: log,
+      reason: "send_to_background_failed",
+      detail: `detail:${type} send failed`,
+      extra: e,
+    });
   }
 }
 
-function isMessageResponse<D>(value: unknown): value is Result<D> {
-  if (typeof value !== "object" || value === null || !("ok" in value)) {
-    return false;
+export function isMessageResponse<D>(value: unknown): value is Result<D> {
+  if (!Array.isArray(value) || value.length !== 2) return false;
+
+  const [data, error] = value;
+
+  // Ok case: [data, null] — data must not be null
+  if (error === null) {
+    return data !== null && data !== undefined;
   }
 
-  const v = value as { ok: unknown; messages?: unknown; extra?: unknown };
+  // Err case: [null, error] — data must be null, error must be an Err
+  if (data !== null) return false;
+  return isErr(error);
+}
 
+function isErr(value: unknown): value is Err {
   return (
-    v.ok === true ||
-    (v.ok === false &&
-      Vec.isArray(v.extra) &&
-      Vec.isArray(v.messages) &&
-      v.messages.length > 0 &&
-      v.messages.every((el): el is string => typeof el === "string"))
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as Err).reason === "string" &&
+    typeof (value as Err).detail === "string"
   );
 }

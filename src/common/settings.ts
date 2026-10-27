@@ -3,7 +3,7 @@ import type { LevelSetting, Logger } from "./logger";
 import { local_storage_get, local_storage_set } from "./storage";
 import { log as rootLog } from "./log.ts";
 import { IdLessTag } from "@src/background/tags.ts";
-import { createError, createOk, Err, Result } from "./error.ts";
+import { ok, err } from "./error.ts";
 
 const log = rootLog.child("settings");
 
@@ -78,18 +78,17 @@ export function storageSettingsFromSetting(
   };
 }
 
-export function settingsFromStorageSetting(
-  storageSettings: StorageExtensionSettings,
-): Result<ExtensionSettings> {
+export function settingsFromStorageSetting(storageSettings: StorageExtensionSettings) {
   const { serverUrl, ...rest } = storageSettings;
   let url = URL.parse(serverUrl);
 
   if (!url)
-    return createError({
+    return err({
       logger: log,
-      message: `server url cannot be converted to URL: ${serverUrl}`,
+      reason: "server_url_parse",
+      detail: `server url cannot be converted to URL: ${serverUrl}`,
     });
-  return createOk({
+  return ok<ExtensionSettings>({
     ...rest,
     serverUrl: url,
   });
@@ -121,13 +120,14 @@ export function isServerConfigured({ serverUrl }: Pick<ExtensionSettings, "serve
 export function errorIfServerUnconfigured(
   { serverUrl }: Pick<ExtensionSettings, "serverUrl">,
   logger?: Logger,
-): Err | null {
+) {
   if (isServerConfigured({ serverUrl })) {
-    return null;
+    return ok(null);
   }
 
-  return createError({
+  return err({
+    reason: "server_unconfigured",
     logger,
-    message: "Server is not configured. Open the extension preferences to set server url.",
+    detail: "Server is not configured. Open the extension preferences to set server url.",
   });
 }

@@ -11,7 +11,7 @@ import {
 import { getElementById, setElementText } from "@common/document";
 import { sendToBackground } from "@common/messaging";
 import { Vec } from "@common/types";
-import { createError, createOk, Result } from "@common/error";
+import { err, ok } from "@common/error";
 const log = rootLog.child("options");
 
 function elFromDataKey<T extends HTMLElement>(key: string): T {
@@ -73,7 +73,7 @@ async function loadSettings(): Promise<void> {
 /**
  * Read form
  */
-function readForm(): Result<ExtensionSettings> {
+function readForm() {
   const sensitiveHeaders = new Set(
     inputSensitiveHeaders.value
       .split(",")
@@ -95,13 +95,14 @@ function readForm(): Result<ExtensionSettings> {
   const serverUrl = URL.parse(inputServerUrl.value.trim());
 
   if (!serverUrl) {
-    return createError({
+    return err({
+      reason: "form_invalid_server_url",
       logger: log,
-      message: `Invalid server url: ${inputServerUrl.value.trim()}`,
+      detail: `Invalid server url: ${inputServerUrl.value.trim()}`,
     });
   }
 
-  return createOk({
+  return ok<ExtensionSettings>({
     serverUrl,
     token: inputAuthToken.value,
     includeScreenshot: inputIncludeScreenshot.checked,
@@ -159,14 +160,13 @@ form.addEventListener("submit", async (e) => {
   btnSave.disabled = true;
 
   try {
-    const updatedSettingsResult = readForm();
+    const [updatedSettings, error] = readForm();
 
-    if (!updatedSettingsResult.ok) {
-      toaster.error(updatedSettingsResult.messages.toString());
+    if (error) {
+      toaster.error(error.detail);
       return;
     }
 
-    const updatedSettings = updatedSettingsResult.data;
     log.setLevel(updatedSettings.logLevel);
     const saved = await saveSettings(updatedSettings);
     fillForm(saved);
@@ -191,30 +191,30 @@ form.addEventListener("submit", async (e) => {
  * Test Endpoints
  */
 btnTest.addEventListener("click", async () => {
-  const updatedSettingsResult = readForm();
+  const [updatedSettings, error] = readForm();
 
-  if (!updatedSettingsResult.ok) {
-    toaster.error(updatedSettingsResult.messages.toString());
+  if (error) {
+    toaster.error(error.detail);
     return;
   }
 
   const out = getElementById("test-result", HTMLDivElement);
-  const { serverUrl, token } = updatedSettingsResult.data;
+  const { serverUrl, token } = updatedSettings;
 
   setElementText(out, "Testing…");
   // TODO: reutrn health, stats response
-  const result = await sendToBackground("TEST_ENDPOINTS", {
+  const [res, resError] = await sendToBackground("TEST_ENDPOINTS", {
     serverUrl: serverUrl.toString(),
     token,
   });
   setElementText(out, "");
 
-  if (!result.ok) {
-    setElementText(out, result.messages.toString(), "err");
+  if (resError) {
+    setElementText(out, resError.detail, "err");
     return;
   }
 
-  result.data.forEach(({ ok, text }) => {
+  res.forEach(({ ok, text }) => {
     const div = document.createElement("div");
     div.classList.add(ok ? "ok" : "err");
     div.textContent = text;

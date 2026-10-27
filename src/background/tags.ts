@@ -1,8 +1,8 @@
-import { createError, createOk, type Result } from "@common/error";
+import { err } from "@common/error";
 import { log as rootLog } from "@common/log";
 import { request } from "./reqwest";
 import type { Option, Int64, Vec } from "@common/types";
-import { getExtensionSettings, isServerConfigured } from "@common/settings";
+import { errorIfServerUnconfigured, getExtensionSettings } from "@common/settings";
 import { createUrl } from "@common/index";
 
 /* Client for the server's tag API
@@ -44,25 +44,15 @@ export interface TagWithCountDto {
 // }
 
 /** All tags known to the server, with usage counts (where used: suggestions/autocomplete). */
-export async function listTags({ timeoutMs = 20000 }: { timeoutMs?: number } = {}): Promise<
-  Result<Vec<TagWithCountDto>>
-> {
-  const extensionSettings = await getExtensionSettings();
-  if (!isServerConfigured(extensionSettings)) {
-    log.debug("Serve not configured, cannot list tags");
-    return createError({
-      logger: log,
-      message: "Server is not configured. Open the extension preferences.",
-    });
-  }
+export async function listTags({ timeoutMs = 20000 }: { timeoutMs?: number } = {}) {
+  const { serverUrl, token } = await getExtensionSettings();
+  const [_, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
+  if (serverUnconfigured !== null) return err(serverUnconfigured);
 
-  const res = await request<Vec<TagWithCountDto>>(
-    createUrl(extensionSettings.serverUrl, "/api/tags"),
-    {
-      token: extensionSettings.token,
-      timeoutMs,
-    },
-  );
+  const res = await request<Vec<TagWithCountDto>>(createUrl(serverUrl, "/api/tags"), {
+    token,
+    timeoutMs,
+  });
 
   return res;
 }
@@ -72,31 +62,19 @@ export async function setPageTag(
   pageId: Int64,
   tags: Vec<IdLessTag>,
   { timeoutMs = 20000 }: { timeoutMs?: number } = {},
-): Promise<Result<Vec<TagDto>>> {
-  const extensionSettings = await getExtensionSettings();
-
-  if (!isServerConfigured(extensionSettings)) {
-    log.debug("Server is not configured, cannot set tags");
-    return createError({
-      logger: log,
-      message: "Srever is not configured. Open the extension preferences.",
-    });
-  }
+) {
+  const { serverUrl, token } = await getExtensionSettings();
+  const [_, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
+  if (serverUnconfigured !== null) return err(serverUnconfigured);
 
   const names = [...new Set(tags.map((t) => t.name.trim()).filter(Boolean))];
-  const res = await request<Vec<TagDto>>(
-    createUrl(extensionSettings.serverUrl, `/api/pages/${pageId}/tags`),
-    {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tags: names }),
-      token: extensionSettings.token,
-      timeoutMs,
-    },
-  );
-  if (!res.ok) {
-    return res;
-  }
+  const res = await request<Vec<TagDto>>(createUrl(serverUrl, `/api/pages/${pageId}/tags`), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tags: names }),
+    token,
+    timeoutMs,
+  });
 
-  return createOk(res.data);
+  return res;
 }

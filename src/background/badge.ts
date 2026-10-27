@@ -1,17 +1,13 @@
-import { Result } from "@common/error";
 import { bgRootlog } from "@common/log";
 import { getExtensionSettings } from "@common/settings";
 import { Int } from "@common/types";
-import { ApiPageDetail } from "./archive";
+import { type PageLookup } from "./archive";
 import { formatTimeFromSec } from "@common/time";
 
 const log = bgRootlog.child("badge");
 
-// TODO: make more generic, take message, error type as parameter
-export function applyStatusBadge(
-  tabId: Int,
-  lookupPageResult: Result<ApiPageDetail | null> | null,
-): Promise<void> {
+// TODO: make more generic, take detail, error type as parameter
+export function applyStatusBadge(tabId: Int, lookupPageResult?: PageLookup): Promise<void> {
   if (!lookupPageResult) {
     return updateBadge({
       tabId,
@@ -20,16 +16,17 @@ export function applyStatusBadge(
     });
   }
 
-  if (!lookupPageResult.ok) {
+  const [page, error] = lookupPageResult;
+  if (error) {
     return updateBadge({
       tabId,
       text: "!",
       color: "#d93025",
-      title: lookupPageResult.messages.toString(),
+      title: error.reason,
     });
   }
 
-  if (lookupPageResult.data === null) {
+  if (page === null) {
     return updateBadge({
       tabId,
       text: "",
@@ -37,7 +34,7 @@ export function applyStatusBadge(
     });
   }
 
-  const lookupPage = lookupPageResult.data;
+  const lookupPage = page;
   const n = lookupPage.captureCount;
   const when = lookupPage.lastCapturedAt;
   const tagNames = lookupPage.tags.map((v) => v.name);

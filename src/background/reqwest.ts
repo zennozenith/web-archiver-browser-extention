@@ -1,4 +1,4 @@
-import { createError, isNamedError, isStandardError, Result } from "@common/error";
+import { err, isNamedError, isStandardError, ok } from "@common/error";
 import { log as rootLog } from "@common/log";
 import type { ReqeustOptions } from "@common/types";
 
@@ -17,7 +17,7 @@ export interface ApiErrorDetail {
 export interface ApiErrorResponse {
   error: {
     code: string;
-    message: string;
+    detail: string;
     status: number;
     details?: ApiErrorDetail[];
     timestamp?: string;
@@ -34,15 +34,7 @@ export async function request<T>(
     token,
     timeoutMs = 30000,
   }: ReqeustOptions = {},
-): Promise<Result<T>> {
-  // try {
-  //   new URL(url);
-  // } catch {
-  //   return createError({
-  //     message: `Invalid URL: "${url}"`,
-  //   });
-  // }
-
+) {
   const headers: Record<string, string> = { Accept: "application/json", ...orignalHeaders };
   if (token) headers.Authorization = `Bearer ${token}`;
   const ctrl = new AbortController();
@@ -67,8 +59,9 @@ export async function request<T>(
     const isAbort = isNamedError(e) && e.name === "AbortError";
     const errorMessage = isStandardError(e) ? e.message : e;
 
-    return createError({
-      message: isAbort
+    return err({
+      reason: "reqwest_generic",
+      detail: isAbort
         ? `Request timed out after ${Math.round(timeoutMs / 1000)}s (${url})`
         : `Cannot reach server at ${url}: ${errorMessage}`,
     });
@@ -81,8 +74,9 @@ export async function request<T>(
   try {
     data = JSON.parse(text) as T;
   } catch {
-    return createError({
-      message: `Response data in not json: ${text}`,
+    return err({
+      reason: "reqwest_response_not_json",
+      detail: `Response data in not json: ${text}`,
     });
   }
 
@@ -95,10 +89,11 @@ export async function request<T>(
         : JSON.stringify(m)
       : (text || res.statusText).slice(0, 300);
 
-    return createError({
-      message: `Server error ${res.status}: ${msg}`,
+    return err({
+      reason: "reqwest_response",
+      detail: `Server error ${res.status}: ${msg}`,
     });
   }
 
-  return { ok: true, data };
+  return ok(data);
 }

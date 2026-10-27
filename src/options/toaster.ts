@@ -20,7 +20,7 @@ export type ToastPosition =
 
 export interface Toast {
   id: string;
-  message: string;
+  detail: string;
   type: ToastType;
   duration: number;
   dismissible: boolean;
@@ -65,7 +65,7 @@ export class Toaster {
    * Show a generic toast.
    * @returns The toast id (for later dismissal).
    */
-  public show(message: string, options: ToastOptions = {}): string {
+  public show(detail: string, options: ToastOptions = {}): string {
     if (typeof document === "undefined") {
       return options.id ?? this.generateId();
     }
@@ -83,10 +83,10 @@ export class Toaster {
     }
 
     const container = this.getContainer(position);
-    const element = this.createToastFromTemplate(id, message, type, dismissible);
+    const element = this.createToastFromTemplate(id, detail, type, dismissible);
     container.appendChild(element);
 
-    const toast: Toast = { id, message, type, duration, dismissible, element };
+    const toast: Toast = { id, detail, type, duration, dismissible, element };
 
     if (duration > 0) {
       // Progress bar duration mirrors total duration
@@ -103,20 +103,20 @@ export class Toaster {
     return id;
   }
 
-  public success(message: string, options: Omit<ToastOptions, "type"> = {}): string {
-    return this.show(message, { ...options, type: "success" });
+  public success(detail: string, options: Omit<ToastOptions, "type"> = {}): string {
+    return this.show(detail, { ...options, type: "success" });
   }
 
-  public error(message: string, options: Omit<ToastOptions, "type"> = {}): string {
-    return this.show(message, { ...options, type: "error" });
+  public error(detail: string, options: Omit<ToastOptions, "type"> = {}): string {
+    return this.show(detail, { ...options, type: "error" });
   }
 
-  public warning(message: string, options: Omit<ToastOptions, "type"> = {}): string {
-    return this.show(message, { ...options, type: "warning" });
+  public warning(detail: string, options: Omit<ToastOptions, "type"> = {}): string {
+    return this.show(detail, { ...options, type: "warning" });
   }
 
-  public info(message: string, options: Omit<ToastOptions, "type"> = {}): string {
-    return this.show(message, { ...options, type: "info" });
+  public info(detail: string, options: Omit<ToastOptions, "type"> = {}): string {
+    return this.show(detail, { ...options, type: "info" });
   }
 
   public dismiss(id: string, force = false): void {
