@@ -1,12 +1,12 @@
 import browser from "webextension-polyfill";
 import { Int, Int64, UrlStr, Vec } from "./types.ts";
 import { log as rootLog } from "./log.ts";
-import { Err, err, Ok } from "./error.ts";
+import { Err, err, Fail, Ok } from "./error.ts";
 import { TestEndpointResponse } from "@src/background/reqwest.ts";
 import { StorageExtensionSettings } from "./settings.ts";
 import { PageLookupFull } from "@src/background/page.ts";
 import { GetPendingFromStorage, RefreshPending } from "@src/background/pending.ts";
-import { GetLocalPageTags, IdLessTag, SetPageTag } from "@src/background/tags.ts";
+import { GetLocalPageTags, IdLessTag, ListTags, SetPageTag } from "@src/background/tags.ts";
 import { ArchiveTab } from "@src/background/archive.ts";
 
 const log = rootLog.child("messaging");
@@ -32,14 +32,15 @@ export interface MessageMap {
   };
   GET_LOCAL_TAGS: { payload: { url: string }; data: GetLocalPageTags };
   ARCHIVE_TAB: { payload: { tabId: Int; tags: Vec<IdLessTag> }; data: ArchiveTab };
+  LIST_TAGS: { payload: undefined; data: ListTags };
+  OPEN_AND_ARCHIVE: { payload: { url: string; tags?: string[] }; data: Ok<boolean> };
+  ARCHIVE_FROM_PAGE: {
+    payload: { tags: Vec<IdLessTag> };
+    data: ArchiveTab | Fail<{ reason: "no_tab_id"; detail: string }>;
+  };
   // SET_PENDING_TAGS: {
   //   payload: { id: Int64; tags: string[] };
   //   data: PendingDto;
-  // };
-  // OPEN_AND_ARCHIVE: { payload: { url: Url; tags?: string[] }; data: void };
-  // ARCHIVE_FROM_PAGE: {
-  //   payload: { tags: Vec<IdLessTag> };
-  //   data: ArchiveStatus;
   // };
 }
 

@@ -5,7 +5,7 @@ import { settingsFromStorageSetting } from "@common/settings";
 import { ApiCaptureSummary, ApiPageDetail } from "@src/background/page";
 import type { PendingDto } from "@src/background/pending";
 import { IdLessTag, TagStore } from "@src/background/tags";
-import { Int64, Page, UrlStr } from "@common/types";
+import type { Option, Int64, Page, UrlStr } from "@common/types";
 import { formatTimeFromSec, timeAgoFromSec, toDateFromSec } from "@common/time";
 
 const log = rootLog.child("popup");
@@ -130,6 +130,7 @@ class CurrentPage {
 
   private errorContainer = getElementById("current-error-container", HTMLDivElement);
   private lastArchived = getElementById("current-last-archived", HTMLDivElement);
+  private flash = getElementById("current-flash", HTMLDivElement);
 
   private versionItemTpl = getElementById("template-version", HTMLTemplateElement);
   private versionList = getElementById("current-versions-list", HTMLUListElement);
@@ -170,7 +171,7 @@ class CurrentPage {
       show(this.errorContainer, false);
 
       // Read at click time so tags edited just before archiving are included.
-      const [, error] = await sendToBackground("ARCHIVE_TAB", {
+      const [archive, error] = await sendToBackground("ARCHIVE_TAB", {
         tabId,
         tags: [...this.getTags()],
       });
@@ -181,6 +182,21 @@ class CurrentPage {
         show(this.errorContainer, true);
         this.archiveBtn.disabled = false;
         return;
+      }
+
+      const { warnings } = archive;
+      const flashText =
+        "Archived ✓" +
+        (warnings.length
+          ? ` (${warnings.length} warning${warnings.length > 1 ? "s" : ""}: ${warnings.join("; ")})`
+          : "");
+
+      // Flash Message
+      if (flashText) {
+        show(this.flash, true);
+        this.flash.textContent = flashText;
+      } else {
+        show(this.flash, false);
       }
 
       location.reload(); // re-lookup to show the new version
@@ -361,6 +377,7 @@ class Pending {
     const titleEl = q<HTMLDivElement>(clone, ".title");
     const urlEl = q<HTMLDivElement>(clone, ".url");
     const tagsEl = q<HTMLDivElement>(clone, ".small.muted");
+    const actionBtn = q<HTMLButtonElement>(clone, ".sm.archive-btn");
 
     titleEl.title = item.title || item.url;
     titleEl.textContent = item.title || displayUrl(item.url);
@@ -370,6 +387,12 @@ class Pending {
 
     const tagNames = item.tags.map((t) => t.name);
     tagsEl.textContent = tagNames.length ? `Tags: ${tagNames.join(", ")}` : "No tags";
+
+    actionBtn.addEventListener("click", async () => {
+      log.debug("Pending list archive requested", { url: item.url });
+      await sendToBackground("OPEN_AND_ARCHIVE", { url: item.url });
+      window.close();
+    });
 
     // TODO: tag-edit and archive buttons for pending items
     return clone;
@@ -397,6 +420,11 @@ class Tag {
 
   private chipTpl = getElementById("template-tag-chip", HTMLTemplateElement);
   private emptyTpl = getElementById("template-tags-empty", HTMLTemplateElement);
+
+  // fields
+  private suggestions = getElementById("tag-options", HTMLDataListElement);
+  /** Server-known tags (name -> color), most used first. */
+  private known = new Map<string, Option<string>>();
 
   private tagStore = new TagStore();
   private pageId: Int64 | null = null;
@@ -440,13 +468,44 @@ class Tag {
     this.renderChips();
   }
 
+  /** Best-effort: a failure only means no autocomplete, so it is logged, not shown. */
+  async loadSuggestions() {
+    const [tags, error] = await sendToBackground("LIST_TAGS");
+    if (error) {
+      log.warn("Cannot load tag suggestions,", error.detail);
+      return;
+    }
+
+    const byUsage = [...tags].sort((a, b) => b.pages - a.pages);
+    this.known = new Map(byUsage.map((t) => [t.name, t.color]));
+    this.renderSuggestions();
+  }
+
+  private renderSuggestions() {
+    const applied = new Set(this.tagStore.tags.map((t) => t.name));
+    const options: HTMLOptionElement[] = [];
+
+    for (const name of this.known.keys()) {
+      if (applied.has(name)) continue;
+      const option = document.createElement("option");
+      option.value = name;
+      options.push(option);
+    }
+    this.suggestions.replaceChildren(...options);
+  }
+
   get currentTags(): IdLessTag[] {
     return this.tagStore.tags; // already a copy
   }
 
   async add(raw: string): Promise<boolean> {
-    const tag = parseTagInput(raw);
-    if (!tag) return false;
+    const parsed = parseTagInput(raw);
+    if (!parsed) return false;
+
+    const tag: IdLessTag = {
+      ...parsed,
+      color: parsed.color ?? this.known.get(parsed.name) ?? null,
+    };
 
     const next = new TagStore(this.tagStore.tags);
     next.upsertTag(tag);
@@ -485,6 +544,8 @@ class Tag {
       }
 
       this.tagStore.tags = saved;
+      for (const t of saved) if (!this.known.has(t.name)) this.known.set(t.name, t.color);
+      this.renderSuggestions();
       return true;
     } finally {
       this.setBusy(false);
@@ -551,6 +612,31 @@ async function getArchiveShortcut(): Promise<string> {
   }
 }
 
+function bindChrome(serverUrl: URL | undefined) {
+  // Both the header button and the "no server" notice share data-key="btn-open-options".
+  document.querySelectorAll<HTMLButtonElement>('[data-key="btn-open-options"]').forEach((btn) =>
+    btn.addEventListener("click", () => {
+      void browser.runtime.openOptionsPage();
+      window.close();
+    }),
+  );
+
+  const serverLink = getElementById("link-open-server", HTMLAnchorElement);
+  if (serverUrl) {
+    serverLink.href = serverUrl.href;
+    show(serverLink, true);
+  }
+
+  // permissions.request must be called directly from a user gesture
+  getElementById("btn-grant-permission", HTMLButtonElement).addEventListener("click", async () => {
+    try {
+      if (await browser.permissions.request({ origins: ["<all_urls>"] })) location.reload();
+    } catch (e) {
+      ErrorUi.push("Cannot request permission", e);
+    }
+  });
+}
+
 async function init() {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
   log.debug("Popup opened", { tabId: tab?.id, url: tab?.url, title: tab?.title });
@@ -577,6 +663,7 @@ async function init() {
     serverUrl: settings.serverUrl,
     hasTabId: tab?.id !== undefined,
   });
+  bindChrome(settings.serverUrl);
 
   if (!tab || tab.id === undefined) return;
 
@@ -589,6 +676,7 @@ async function init() {
 
   const tagUi = tab.url ? new Tag(tab.url, state) : null;
   if (tagUi && state.kind === "not_archived") await tagUi.loadLocalTags();
+  if (tagUi && settings.serverUrl) void tagUi.loadSuggestions();
 
   new CurrentPage(tab, state, shortcut, () => tagUi?.currentTags ?? []);
   new Pending(pendingResult);

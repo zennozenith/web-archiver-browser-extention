@@ -153,3 +153,5 @@ export async function getLocalPageTags(url: string) {
     return wrapErr({ reason: "storage", detail: String(e) });
   }
 }
+
+export type ListTags = Awaited<ReturnType<typeof listTags>>;

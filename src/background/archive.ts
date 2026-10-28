@@ -124,7 +124,7 @@ async function archiveTab(tabId: Int, { tags }: { tags?: Vec<IdLessTag> } = {}) 
     requestTimeoutSec,
   } = await getExtensionSettings();
   const [_, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
-  if (serverUnconfigured !== null) return err(serverUnconfigured);
+  if (serverUnconfigured !== null) return wrapErr(serverUnconfigured);
 
   const [url, error] = await extractTabUrl(tabId, log);
   if (error) return wrapErr(error);
@@ -379,9 +379,8 @@ export async function handleOpened(tabId: Int) {
 
   const { serverUrl, directArchiveMode, directArchiveDelaySec, defaultTags, token } =
     await getExtensionSettings();
-  const serverUnconfigured = errorIfServerUnconfigured({ serverUrl }, log);
-  if (serverUnconfigured !== null) return serverUnconfigured;
-  await getExtensionSettings();
+  const [_, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
+  if (serverUnconfigured !== null) return wrapErr(serverUnconfigured);
 
   await sleep(Math.max(0, Number(directArchiveDelaySec) || 0) * 1000);
 

@@ -1,3 +1,5 @@
+import { Fail } from "@common/error";
+import { ArchiveTab } from "../archive";
 import { IdLessTag } from "../tags";
 import type { UrlStr, Option, Vec } from "@common/types";
 
@@ -125,23 +127,23 @@ export function pageBanner(opts: BannerOpts) {
 
     // TODO:
     // const result: Result<unknown> = await api.runtime.sendMessage({
-    await api.runtime.sendMessage({
+    const [data, error] = (await api.runtime.sendMessage({
       type: "ARCHIVE_FROM_PAGE",
       // explicitly selected tags; pending-queue tags merge in the background
       payload: { tags: [...chosen] },
-    });
+    })) as ArchiveTab | Fail<{ reason: "no_tab_id"; detail: string }>;
 
-    // if (result.ok === true && result.data.state === "ok") {
-    //   const count = result.data.captureCount;
+    if (data !== null) {
+      const count = data.response.version;
 
-    //   render("ok", "Archived ✓" + (count ? ` (${count} version${count === 1 ? "" : "s"})` : ""), [
-    //     ["Close", close],
-    //   ]);
+      render("ok", "Archived ✓" + (count ? ` (${count} version${count === 1 ? "" : "s"})` : ""), [
+        ["Close", close],
+      ]);
 
-    //   timer = setTimeout(close, 5000);
-    // } else {
-    //   render("err", `Archive failed: ${JSON.stringify(result, null, 2)}`, [["Close", close]]);
-    // }
+      timer = setTimeout(close, 5000);
+    } else {
+      render("err", `Archive failed: [${error.reason}] ${error.detail}`, [["Close", close]]);
+    }
   };
 
   const renderChips = () => {

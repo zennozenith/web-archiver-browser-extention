@@ -1,7 +1,13 @@
 import browser from "webextension-polyfill";
 
-import { ok, Result, err } from "@common/error";
-import { archiveWithFeedback, deleteHeaderMemory, handleOpened, patchHeaders } from "./archive";
+import { ok, Result, err, wrapErr } from "@common/error";
+import {
+  archiveWithFeedback,
+  deleteHeaderMemory,
+  handleOpened,
+  openAndArchive,
+  patchHeaders,
+} from "./archive";
 import { getPendingFromStorage, refreshPending } from "./pending";
 import { bgRootlog as log, receiveForwardedLogsInBackground } from "@common/log";
 import { session_storage_delete, session_storage_get } from "@common/storage";
@@ -17,7 +23,7 @@ import {
 import { applyStatusBadge } from "./badge";
 import { TestEndpointResponse } from "./reqwest";
 import { pageLookupFull, statusCacheKey } from "./page";
-import { getLocalPageTags, setLocalPageTag, setRemotePageTag } from "./tags";
+import { getLocalPageTags, setLocalPageTag, setRemotePageTag, listTags } from "./tags";
 
 /* Popup/options pages forward their log entries here so everything shows up
    in this (service worker) console. */
@@ -60,8 +66,8 @@ browser.tabs.onUpdated.addListener(async (tabId, change, tab) => {
   }
 
   const { serverUrl, autoCheck } = await getExtensionSettings();
-  const serverUnconfigured = errorIfServerUnconfigured({ serverUrl }, log);
-  if (serverUnconfigured !== null) return serverUnconfigured;
+  const [_, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
+  if (serverUnconfigured !== null) return wrapErr(serverUnconfigured);
 
   if (autoCheck) pageLookupFull(tabId);
 });
@@ -73,8 +79,8 @@ browser.tabs.onActivated.addListener(async ({ tabId }) => {
   logCheck.debug("Tab activated with no cached status, re-checking", { tabId });
 
   const { serverUrl, autoCheck } = await getExtensionSettings();
-  const serverUnconfigured = errorIfServerUnconfigured({ serverUrl }, log);
-  if (serverUnconfigured !== null) return serverUnconfigured;
+  const [_, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
+  if (serverUnconfigured !== null) return wrapErr(serverUnconfigured);
 
   if (autoCheck) {
     pageLookupFull(tabId);
@@ -272,6 +278,7 @@ registerHandlers({
   },
 
   GET_LOCAL_TAGS: ({ url }) => getLocalPageTags(url),
+  LIST_TAGS: () => listTags(),
 
   ARCHIVE_TAB: async ({ tabId, tags }) => {
     // `tags` is optional: when given, they are sent along with the archive request
@@ -284,25 +291,19 @@ registerHandlers({
   //   return await updatePendingTags(id, { tags });
   // },
 
-  // OPEN_AND_ARCHIVE: async ({ url, tags }) => {
-  //   // Optional tags ride along on the opened-tab flag; pending-queue tags merge
-  //   // inside archiveTab regardless.
-  //   await openAndArchive(url, tags ?? []);
-  //   return ok(undefined);
-  // },
-  // ARCHIVE_FROM_PAGE: async ({ tags }, sender) => {
-  //   if (sender.tab?.id === undefined) {
-  //     return err({
-  //       logger: log,
-  //       detail: "Tab id undefined in ARCHIVE_FROM_PAGE",
-  //     });
-  //   }
+  OPEN_AND_ARCHIVE: async ({ url, tags }) => {
+    await openAndArchive(url, tags ?? []);
+    return ok(true);
+  },
+  ARCHIVE_FROM_PAGE: async ({ tags }, sender) => {
+    if (sender.tab?.id === undefined) {
+      return err({
+        logger: log,
+        reason: "no_tab_id",
+        detail: "Tab id undefined in ARCHIVE_FROM_PAGE",
+      });
+    }
 
-  //   const result = await archiveWithFeedback(sender.tab.id, { toast: false, tags });
-  //   if (result.ok === false) {
-  //     return result;
-  //   }
-
-  //   return await getArchiveStatus(sender.tab.id);
-  // },
+    return await archiveWithFeedback(sender.tab.id, { toast: false, tags });
+  },
 });
