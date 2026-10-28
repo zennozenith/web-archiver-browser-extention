@@ -9,23 +9,31 @@ export interface TestEndpointResponse {
   text: string;
 }
 
-export interface ApiErrorDetail {
-  field?: string;
-  issue: string;
-}
+// export interface ApiErrorDetail {
+//   field?: string;
+//   issue: string;
+// }
+
+// export interface ApiErrorResponse {
+//   error: {
+//     code: string;
+//     detail: string;
+//     status: number;
+//     details?: ApiErrorDetail[];
+//     timestamp?: string;
+//     path?: string;
+//   };
+// }
 
 export interface ApiErrorResponse {
   error: {
     code: string;
-    detail: string;
-    status: number;
-    details?: ApiErrorDetail[];
-    timestamp?: string;
-    path?: string;
+    message: string;
+    details?: Record<string, unknown> | unknown[];
   };
 }
 
-export async function request<T>(
+export async function reqwest<T>(
   url: URL,
   {
     method = "GET",
@@ -80,20 +88,53 @@ export async function request<T>(
     });
   }
 
+  if (res.ok && isApiErrorResponse(data)) {
+    return err({
+      reason: "reqwest_response_parse",
+      detail: `${data.error.code}: ${data.error.message}`,
+      extra: undefined,
+    });
+  }
+
   if (!res.ok) {
-    let error_data = data as null | ApiErrorResponse;
-    const m = error_data && error_data.error;
-    const msg = m
-      ? typeof m === "string"
-        ? m
-        : JSON.stringify(m)
+    // try to interpret body as ApiErrorResponse
+    const apiErr = parseApiError(data);
+    const msg = apiErr
+      ? `${apiErr.error.message} (${apiErr.error.code})`
       : (text || res.statusText).slice(0, 300);
 
+    if (apiErr) {
+      return err({
+        reason: "reqwest_api_error",
+        detail: `Server error ${res.status}: ${msg}`,
+        extra: apiErr,
+      });
+    }
+
     return err({
-      reason: "reqwest_response",
+      reason: "reqwest_response_parse",
       detail: `Server error ${res.status}: ${msg}`,
     });
   }
 
   return ok(data);
+}
+
+function isJsonObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+export function isApiErrorResponse(v: unknown): v is ApiErrorResponse {
+  if (!isJsonObject(v)) return false;
+  const e = v["error"];
+  if (!isJsonObject(e)) return false;
+  if (typeof e["code"] !== "string") return false;
+  if (typeof e["message"] !== "string") return false;
+  const d = e["details"];
+  if (d !== undefined && !(isJsonObject(d) || Array.isArray(d))) return false;
+  return true;
+}
+
+function parseApiError(data: unknown): ApiErrorResponse | null {
+  return isApiErrorResponse(data) ? data : null;
 }

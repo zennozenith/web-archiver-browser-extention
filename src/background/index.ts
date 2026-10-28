@@ -1,14 +1,8 @@
 import browser from "webextension-polyfill";
 
 import { ok, Result, err } from "@common/error";
-import {
-  archiveWithFeedback,
-  deleteHeaderMemory,
-  pageLookup,
-  handleOpened,
-  patchHeaders,
-} from "./archive";
-import { refreshPending } from "./pending";
+import { archiveWithFeedback, deleteHeaderMemory, handleOpened, patchHeaders } from "./archive";
+import { getPendingFromStorage, refreshPending } from "./pending";
 import { bgRootlog as log, receiveForwardedLogsInBackground } from "@common/log";
 import { session_storage_delete, session_storage_get } from "@common/storage";
 import { canonicalizeUrl, extractTabUrl, isArchivable, sha256 } from "@common/index";
@@ -21,6 +15,9 @@ import {
   storageSettingsFromSetting,
 } from "@common/settings";
 import { applyStatusBadge } from "./badge";
+import { TestEndpointResponse } from "./reqwest";
+import { pageLookupFull } from "./page";
+import { setLocalPageTag, setRemotePageTag } from "./tags";
 
 /* Popup/options pages forward their log entries here so everything shows up
    in this (service worker) console. */
@@ -66,7 +63,7 @@ browser.tabs.onUpdated.addListener(async (tabId, change, tab) => {
   const serverUnconfigured = errorIfServerUnconfigured({ serverUrl }, log);
   if (serverUnconfigured !== null) return serverUnconfigured;
 
-  if (autoCheck) pageLookup(tabId);
+  if (autoCheck) pageLookupFull(tabId);
 });
 
 browser.tabs.onActivated.addListener(async ({ tabId }) => {
@@ -80,7 +77,7 @@ browser.tabs.onActivated.addListener(async ({ tabId }) => {
   if (serverUnconfigured !== null) return serverUnconfigured;
 
   if (autoCheck) {
-    pageLookup(tabId);
+    pageLookupFull(tabId);
   }
 });
 
@@ -139,7 +136,7 @@ browser.storage.onChanged.addListener(async (changes, namespace) => {
 
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
 
-  if (tab.id !== undefined) await pageLookup(tab.id);
+  if (tab.id !== undefined) await pageLookupFull(tab.id);
 });
 
 browser.webRequest.onSendHeaders.addListener(
@@ -192,7 +189,7 @@ type Handlers = {
   [K in MessageType]: (
     payload: MessagePayload<K>,
     sender: browser.Runtime.MessageSender,
-  ) => Result<MessageData<K>> | Promise<Result<MessageData<K>>>;
+  ) => MessageData<K> | Promise<MessageData<K>>;
 };
 
 /** Requires a handler for every message type (compile error if one is missing). */
@@ -235,29 +232,42 @@ registerHandlers({
   },
   // TODO: better tests
   TEST_ENDPOINTS: async ({ serverUrl: _t, token: _a }) => {
-    const result = await Promise.all([
+    const result: TestEndpointResponse[] = await Promise.all([
       // TODO:
       // testPending(endpoints.pending, token),
       // testPageStatus(endpoints.check, { token, queryUrl: "https://example.com/" }),
     ]);
     return ok(result);
   },
-  PAGE_LOOKUP: async ({ tabId }) => {
-    const lookupResult = await pageLookup(tabId);
-    applyStatusBadge(tabId, lookupResult);
-    return lookupResult;
+  PAGE_LOOKUP_FULL: async ({ tabId }) => {
+    const lookupFullResult = await pageLookupFull(tabId);
+    applyStatusBadge(tabId, lookupFullResult);
+    return lookupFullResult;
   },
 
-  // GET_PENDING: async () => {
-  //   const { pending } = (await browser.storage.local.get({ pending: null })) as {
-  //     pending: PendingInStorage;
-  //   };
-  //   return ok<PendingInStorage>(pending);
-  // },
-  // REFRESH_PENDING: async () => {
-  //   const t = await refreshPending();
-  //   return ok({ ok: t === null ? false : t.ok });
-  // },
+  GET_PENDING: async () => {
+    return await getPendingFromStorage();
+  },
+
+  REFRESH_PENDING: async () => {
+    return await refreshPending();
+  },
+  SET_PAGE_TAGS: async ({ idOrUrl, tags }, sender) => {
+    if (typeof idOrUrl === "string") {
+      return setLocalPageTag(idOrUrl, tags);
+    }
+
+    const result = await setRemotePageTag(idOrUrl, tags);
+    const [, error] = result;
+
+    // Tags are site-wide: after a successful change, drop the cached status so
+    // the next GET_ARCHIVE for this tab returns the new tag list.
+    if (!error && sender?.tab?.id !== undefined) {
+      await session_storage_delete(`status:${sender.tab.id}`);
+    }
+    return result;
+  },
+
   // // TODO: rename update pending
   // SET_PENDING_TAGS: async ({ id, tags }) => {
   //   return await updatePendingTags(id, { tags });
@@ -268,15 +278,6 @@ registerHandlers({
   //   return await archiveWithFeedback(tabId, { toast: false, tags });
   // },
 
-  // SET_SITE_TAGS: async ({ url, tags }, sender) => {
-  //   const result = await setSiteTags(url, tags);
-  //   // Tags are site-wide: after changing them, refresh the cached status so the
-  //   // next GET_ARCHIVE for this tab returns the new tag list.
-  //   if (result.ok === true && sender?.tab?.id !== undefined) {
-  //     await session_storage_delete(`status:${sender.tab.id}`);
-  //   }
-  //   return result;
-  // },
   // OPEN_AND_ARCHIVE: async ({ url, tags }) => {
   //   // Optional tags ride along on the opened-tab flag; pending-queue tags merge
   //   // inside archiveTab regardless.

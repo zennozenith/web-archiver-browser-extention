@@ -1,10 +1,10 @@
 import browser from "webextension-polyfill";
 
-import { ok, err } from "@common/error";
+import { ok, err, wrapErr } from "@common/error";
 import { bgRootlog as log } from "@common/log";
 import type { UrlStr, Option, Int64, Page, Vec } from "@common/types";
 import { errorIfServerUnconfigured, getExtensionSettings } from "@common/settings";
-import { request } from "./reqwest";
+import { reqwest } from "./reqwest";
 import type { TestEndpointResponse } from "./reqwest";
 import { TagDto } from "./tags";
 import { nowUnixEpochSeconds, UnixEpochSeconds } from "@common/time";
@@ -40,6 +40,19 @@ export interface PendingInStorage {
   error?: string;
 }
 
+export type GetPendingFromStorage = Awaited<ReturnType<typeof getPendingFromStorage>>;
+export type RefreshPending = Awaited<ReturnType<typeof refreshPending>>;
+
+export async function getPendingFromStorage() {
+  const { pending } = (await browser.storage.local.get({ pending: null })) as {
+    pending: PendingInStorage;
+  };
+  if (pending.error !== undefined) {
+    return err({ logger: log, reason: "pending_error", detail: pending.error });
+  }
+  return ok<PendingInStorage>(pending);
+}
+
 /** Fetch the server's pending queue and cache the result in
  *  browser.storage.local ("pending"). */
 export async function refreshPending() {
@@ -47,7 +60,7 @@ export async function refreshPending() {
   const [_, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
   if (serverUnconfigured !== null) return err(serverUnconfigured);
 
-  const [res, resError] = await request<Page<PendingDto>>(createUrl(serverUrl, "/api/pending"), {
+  const [res, resError] = await reqwest<Page<PendingDto>>(createUrl(serverUrl, "/api/pending"), {
     token,
     timeoutMs: 20000,
   });
@@ -66,6 +79,7 @@ export async function refreshPending() {
       fetchedAt: nowUnixEpochSeconds(),
       total: res.items.length,
       items: res.items,
+      error: undefined,
     };
   } else {
     // Keep the last good list, surface the error to the popup.
@@ -77,9 +91,12 @@ export async function refreshPending() {
     };
   }
   await browser.storage.local.set({ pending: data });
-
   log[res !== null ? "debug" : "warn"]("Pending refresh", { total: data.total });
-  return ok(null);
+
+  if (resError) {
+    return wrapErr(resError);
+  }
+  return ok(data);
 }
 
 /** Add an URL (with optional queued tags) to the server's pending queue. */
@@ -91,7 +108,7 @@ export async function addPending(
   const [_, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
   if (serverUnconfigured !== null) return err(serverUnconfigured);
 
-  const res = await request<PendingDto>(createUrl(serverUrl, "/api/pending"), {
+  const res = await reqwest<PendingDto>(createUrl(serverUrl, "/api/pending"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url, title, tags }),
@@ -108,7 +125,7 @@ export async function addPending(
 
 /** GET /api/pending — used for the endpoint test. */
 export async function testPending(pendingUrl: URL, token?: string) {
-  const [res, error] = await request<Page<PendingDto>>(createUrl(pendingUrl, "/api/pending"), {
+  const [res, error] = await reqwest<Page<PendingDto>>(createUrl(pendingUrl, "/api/pending"), {
     token,
     timeoutMs: 20000,
   });

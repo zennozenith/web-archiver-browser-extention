@@ -25,5 +25,5 @@ export type WithNullish<T> = T | null | undefined;
 
 export interface Page<T> {
   items: Vec<T>;
-  next_cursor: Option<string>;
+  nextCursor: Option<string>;
 }

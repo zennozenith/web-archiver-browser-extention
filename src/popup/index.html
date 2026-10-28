@@ -43,7 +43,7 @@
     </div>
   </header>
 
-  <div id="spinner" class="spinner-card">
+  <div id="spinner" class="spinner-card hidden">
     <div class="spinner-dots">
       <div></div>
       <div></div>
@@ -109,7 +109,7 @@
       <!-- Current Page Errors/Success/Versions -->
       <div id="current-error-container"></div>
       <ul id="current-versions-list" class="versions"></ul>
-      <div id="current-versions-overflow" class="muted small">Overflow</div>
+      <div id="current-versions-overflow" class="muted small"></div>
       <div id="current-last-archived" class="muted small "></div>
       <div id="current-flash" class="success "></div>
 
@@ -125,10 +125,12 @@
           <span class="muted small">Tags</span>
         </div>
         <div id="current-tags" class="tags"></div>
+        <div id="current-tags-error" class="error small hidden" role="alert" hidden></div>
         <div class="row">
-          <input id="current-tag-input" type="text" list="tag-options" maxlength="64" placeholder="Add tag…"
-            class="tag-input" aria-label="Add a tag to this page's site" />
-          <button id="current-tag-add" class="" type="button">Add</button>
+          <input id="current-tag-input" type="text" list="tag-options" maxlength="64"
+            placeholder="Add tag…  (name or name:color)" class="tag-input" aria-label="Add a tag to this page's site"
+            autocomplete="off" />
+          <button id="current-tag-add" type="button">Add</button>
         </div>
         <datalist id="tag-options"></datalist>
       </div>
@@ -146,9 +148,6 @@
         </div>
       </div>
 
-      <div id="pending-unconfigured" class="muted hidden">
-        Pending URL endpoint not configured.
-      </div>
       <div id="pending-error-container"></div>
       <div id="pending-empty" class="muted hidden">Nothing pending 🎉</div>
 
@@ -168,6 +167,26 @@
       <button class="sm tags-btn" title="Edit tags for this queued page">Tags</button>
       <button class="sm archive-btn" title="Open in a new tab and archive">Archive</button>
     </li>
+  </template>
+
+  <template id="template-version">
+    <li class="ver">
+      <a class="ver-link" href="#"></a>
+      <time class="ver-time"></time>
+      <span class="ver-ago muted"></span>
+    </li>
+  </template>
+
+
+  <template id="template-tag-chip">
+    <span class="tag-chip">
+      <span class="tag-chip-name"></span>
+      <button type="button" class="sm tag-chip-remove" aria-label="Remove tag">×</button>
+    </span>
+  </template>
+
+  <template id="template-tags-empty">
+    <span class="muted small">No tags yet</span>
   </template>
 </body>
 

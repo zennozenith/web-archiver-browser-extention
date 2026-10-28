@@ -9,6 +9,9 @@
   --warn: #b26a00;
   --err: #d93025;
   --errbg: #fdecea;
+
+  --versions-row-h: 28px;
+  --versions-max-rows: 5; /* visible rows before scroll */
 }
 
 @media (prefers-color-scheme: dark) {
@@ -262,31 +265,103 @@ button.sm {
   font-weight: 600;
 }
 
-ul {
+/* container: scrolls, owns the border + radius */
+.versions {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-}
 
-.versions {
-  max-height: 110px;
+  max-height: calc(var(--versions-row-h) * var(--versions-max-rows));
   overflow-y: auto;
+  overscroll-behavior: contain; /* don't chain-scroll the page */
+  scrollbar-gutter: stable; /* reserve gutter → no layout shift on scroll */
+
   border: 1px solid var(--border);
   border-radius: 6px;
+  background: var(--surface, transparent);
 }
 
-.versions li {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 3px 8px;
+/* row: link left, times grouped right */
+.ver {
+  display: grid;
+  grid-template-columns: auto 1fr auto; /* link | time | ago */
+  align-items: baseline;
+  gap: 10px;
+  padding: 0 10px;
+  min-height: var(--versions-row-h);
+  line-height: var(--versions-row-h);
   border-bottom: 1px solid var(--border);
 }
 
-.versions li:last-child {
-  border: 0;
+/* last row inside the scroll viewport should NOT lose its separator */
+.ver:not(:last-child) {
+  border-bottom: 1px solid var(--border);
+}
+.ver:last-child {
+  border-bottom: 0;
+}
+
+/* hover/focus feedback only on interactive rows */
+.ver:has(.ver-link[href]):hover {
+  background: color-mix(in srgb, var(--border) 40%, transparent);
+}
+
+/* the link */
+.ver-link {
+  font-variant-numeric: tabular-nums; /* "10" vs "9" align */
+  text-decoration: none;
+  color: var(--link, inherit);
+  border-radius: 3px;
+  padding: 0 2px;
+  margin: 0 -2px;
+  cursor: pointer;
+}
+.ver-link:hover {
+  text-decoration: underline;
+}
+.ver-link:focus-visible {
+  outline: 2px solid var(--focus, currentColor);
+  outline-offset: 1px;
+}
+
+/* static variant (no url): not a link, don't look like one */
+.ver-link:not([href]) {
+  color: inherit;
+  cursor: default;
+  text-decoration: none;
+}
+
+/* the two time cells */
+.ver-time {
+  color: var(--fg, inherit);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ver-ago {
+  white-space: nowrap;
+  text-align: right;
+  min-width: 5ch; /* stops "1h" / "12m" from jittering */
+  font-variant-numeric: tabular-nums;
+}
+
+/* muted token (define once if not already) */
+.muted {
+  color: var(--muted-fg, color-mix(in srgb, currentColor 55%, transparent));
+}
+
+/* slimmer scrollbar (webkit + firefox) */
+.versions {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.versions::-webkit-scrollbar {
+  width: 8px;
+}
+.versions::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: 4px;
 }
 
 /* Site-wide tags (popup, current page card) */
@@ -364,9 +439,15 @@ ul {
   display: none;
 }
 
+#pending-empty:empty {
+  display: none;
+}
+
 .pending {
   max-height: 240px;
   overflow-y: auto;
+  padding: 0;
+  margin: 0;
 }
 
 .pending li {

@@ -1,10 +1,12 @@
 import browser from "webextension-polyfill";
-import { Int, UrlStr } from "./types.ts";
+import { Int, Int64, UrlStr, Vec } from "./types.ts";
 import { log as rootLog } from "./log.ts";
-import { Err, err, Result } from "./error.ts";
+import { Err, err, Ok } from "./error.ts";
 import { TestEndpointResponse } from "@src/background/reqwest.ts";
 import { StorageExtensionSettings } from "./settings.ts";
-import { ApiPageDetail } from "@src/background/archive.ts";
+import { PageLookupFull } from "@src/background/page.ts";
+import { GetPendingFromStorage, RefreshPending } from "@src/background/pending.ts";
+import { IdLessTag, SetPageTag } from "@src/background/tags.ts";
 
 const log = rootLog.child("messaging");
 
@@ -15,13 +17,18 @@ export type Empty = Record<string, never>;
  * a successful response carries.
  */
 export interface MessageMap {
-  GET_EXTENSION_SETTINGS: { payload: undefined; data: StorageExtensionSettings };
+  GET_EXTENSION_SETTINGS: { payload: undefined; data: Ok<StorageExtensionSettings> };
   TEST_ENDPOINTS: {
     payload: { serverUrl: UrlStr; token?: string };
-    data: TestEndpointResponse[];
+    data: Ok<TestEndpointResponse[]>;
   };
-  PAGE_LOOKUP: { payload: { tabId: Int }; data: ApiPageDetail | null };
-  // GET_PENDING: { payload: undefined; data: PendingInStorage };
+  PAGE_LOOKUP_FULL: { payload: { tabId: Int }; data: PageLookupFull };
+  GET_PENDING: { payload: undefined; data: GetPendingFromStorage };
+  REFRESH_PENDING: { payload: undefined; data: RefreshPending };
+  SET_PAGE_TAGS: {
+    payload: { idOrUrl: string | Int64; tags: Vec<IdLessTag> };
+    data: SetPageTag;
+  };
   // GET_ARCHIVE: { payload: { tabId: Int }; data: ArchiveStatus };
   // SET_PENDING_TAGS: {
   //   payload: { id: Int64; tags: string[] };
@@ -34,8 +41,6 @@ export interface MessageMap {
   //     warnings: string[];
   //   };
   // };
-  // SET_SITE_TAGS: { payload: { url: Url; tags: Vec<IdLessTag> }; data: Vec<IdLessTag> };
-  // REFRESH_PENDING: { payload: undefined; data: { ok: boolean } };
   // OPEN_AND_ARCHIVE: { payload: { url: Url; tags?: string[] }; data: void };
   // ARCHIVE_FROM_PAGE: {
   //   payload: { tags: Vec<IdLessTag> };
@@ -56,16 +61,23 @@ export type Message<T extends MessageType = MessageType> = {
 type PayloadArgs<T extends MessageType> =
   MessagePayload<T> extends undefined ? [payload?: undefined] : [payload: MessagePayload<T>];
 
+export type SendToBackground<T extends MessageType> = Awaited<
+  ReturnType<typeof sendToBackground<T>>
+>;
 /**
  * Sends a strongly-typed message to the background service worker/script.
  * `T` is inferred from `type`, so payload and return type are both checked.
  */
-export async function sendToBackground<T extends MessageType>(type: T, ...args: PayloadArgs<T>) {
+export async function sendToBackground<const T extends MessageType = MessageType>(
+  type: T,
+  ...args: PayloadArgs<T>
+) {
   const message = { type, payload: args[0] } as Message<T>;
   log.debug(`message:${type} →`, args[0]);
   try {
-    const response: Result<MessageData<T>> = await browser.runtime.sendMessage(message);
-    if (!isMessageResponse<MessageData<T>>(response)) {
+    const response = await browser.runtime.sendMessage(message);
+
+    if (!isMessageResponse<T>(response)) {
       return err({
         logger: log,
         reason: "no_response",
@@ -85,7 +97,7 @@ export async function sendToBackground<T extends MessageType>(type: T, ...args: 
   }
 }
 
-export function isMessageResponse<D>(value: unknown): value is Result<D> {
+export function isMessageResponse<T extends MessageType>(value: unknown): value is MessageData<T> {
   if (!Array.isArray(value) || value.length !== 2) return false;
 
   const [data, error] = value;

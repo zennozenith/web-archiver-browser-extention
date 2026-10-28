@@ -1,13 +1,13 @@
 import { bgRootlog } from "@common/log";
 import { getExtensionSettings } from "@common/settings";
 import { Int } from "@common/types";
-import { type PageLookup } from "./archive";
 import { formatTimeFromSec } from "@common/time";
+import { PageLookupFull } from "./page";
 
 const log = bgRootlog.child("badge");
 
 // TODO: make more generic, take detail, error type as parameter
-export function applyStatusBadge(tabId: Int, lookupPageResult?: PageLookup): Promise<void> {
+export function applyStatusBadge(tabId: Int, lookupPageResult?: PageLookupFull): Promise<void> {
   if (!lookupPageResult) {
     return updateBadge({
       tabId,
@@ -34,7 +34,7 @@ export function applyStatusBadge(tabId: Int, lookupPageResult?: PageLookup): Pro
     });
   }
 
-  const lookupPage = page;
+  const [lookupPage, _] = page;
   const n = lookupPage.captureCount;
   const when = lookupPage.lastCapturedAt;
   const tagNames = lookupPage.tags.map((v) => v.name);

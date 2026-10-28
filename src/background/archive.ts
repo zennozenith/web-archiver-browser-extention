@@ -3,7 +3,7 @@ import browser from "webextension-polyfill";
 
 import { err, ok, isStandardError, wrapErr } from "@common/error";
 import { bgRootlog } from "@common/log";
-import { request, TestEndpointResponse } from "./reqwest";
+import { reqwest, TestEndpointResponse } from "./reqwest";
 import { Int, Int64, UrlStr, Option, Vec } from "@common/types";
 import { session_storage_delete, session_storage_get, session_storage_set } from "@common/storage";
 import { errorIfServerUnconfigured, getExtensionSettings } from "@common/settings";
@@ -13,9 +13,9 @@ import { Screenshot, takeScreenshot } from "./screenshot";
 import { injectBanner } from "./browser-scripting";
 import { updateBadge } from "./badge";
 import { collectPage, type Page } from "./content-scripts";
+import { ApiPageDetail, pageLookup } from "./page";
 
 const log = bgRootlog.child("archive");
-const logArchiveStatus = log.child("status");
 
 const logCapture = bgRootlog.child("capture");
 
@@ -43,59 +43,8 @@ export interface ApiArchiveResponse {
   deduplicated: Dedup;
 }
 
-export interface ApiPageDto {
-  id: Int64;
-  url: string;
-  host: string;
-  title: Option<string>;
-  captureCount: Int64;
-  lastCapturedAt: Option<Int64>;
-  tags: Vec<TagDto>;
-}
-
-export interface ApiCaptureSummary {
-  id: Int64;
-  version: Int64;
-  capturedAt: Int64;
-  title: Option<string>;
-  statusCode: Option<string>;
-  contentHash: Option<string>; // hex
-  hasScreenshot: boolean;
-}
-
-export interface ApiPageDetail extends ApiPageDto {
-  latestCapture: ApiCaptureSummary;
-}
-
 const busyTabs = new Set<Int>();
 
-const inflight = new Map<
-  string,
-  Promise<
-    | [
-        null,
-        {
-          reason: "reqwest_generic";
-          detail: string;
-        },
-      ]
-    | [
-        null,
-        {
-          reason: "reqwest_response_not_json";
-          detail: string;
-        },
-      ]
-    | [
-        null,
-        {
-          reason: "reqwest_response";
-          detail: string;
-        },
-      ]
-    | [ApiPageDetail | null, null]
-  >
->();
 const sleep = (ms: Int) => new Promise((resolve) => setTimeout(resolve, ms));
 const headerMemory = new Map<Int, Partial<HeadersDetails>>();
 
@@ -329,7 +278,7 @@ async function archiveTab(tabId: Int, { tags }: { tags?: Vec<IdLessTag> } = {}) 
       screenshotBytes: maybeScreenshot !== null ? maybeScreenshot.blob.size : null,
     });
 
-    const [response, error] = await request<ApiArchiveResponse>(
+    const [response, error] = await reqwest<ApiArchiveResponse>(
       createUrl(serverUrl, "/api/archive"),
       {
         method: "POST",
@@ -412,55 +361,6 @@ export async function archiveWithFeedback(
   }
 }
 
-export type PageLookup = Awaited<ReturnType<typeof pageLookup>>;
-
-/**
- * Returns Result<null> if no page found for given lookup url
- */
-export async function pageLookup(tabId: Int) {
-  const { serverUrl, token } = await getExtensionSettings();
-  const [_, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
-  if (serverUnconfigured !== null) return err(serverUnconfigured);
-
-  const [urlToLookUp, error] = await extractTabUrl(tabId, log);
-  if (error) return wrapErr(error);
-
-  const url = canonicalizeUrl(urlToLookUp);
-  const urlShaHash = await sha256(url);
-
-  const key = urlShaHash;
-  if (inflight.has(key)) {
-    logArchiveStatus.debug("Joining in-flight status check", { url: url });
-    const status = await inflight.get(key)!;
-    return status;
-  }
-
-  const inflightStatusPromise = (async () => {
-    logArchiveStatus.debug("Checking archive status", { url: url });
-
-    const done = logArchiveStatus.time("status check");
-
-    const reqUrl = createUrl(serverUrl, "/api/pages/lookup");
-    reqUrl.searchParams.set("url", url);
-
-    // TODO: check what is returned if page not found
-    let result = await request<ApiPageDetail | null>(reqUrl, {
-      token,
-      timeoutMs: 20000,
-    });
-    done();
-
-    logArchiveStatus[error ? "warn" : "debug"](result);
-
-    await session_storage_set(`status:${urlShaHash}`, result);
-
-    return result;
-  })().finally(() => inflight.delete(key));
-
-  inflight.set(key, inflightStatusPromise);
-  return inflightStatusPromise;
-}
-
 export async function openAndArchive(url: UrlStr, tags: string[] = []) {
   const tab = await browser.tabs.create({ url, active: true });
   logCapture.info("Opened new tab for direct archive", { url, tabId: tab.id });
@@ -475,7 +375,7 @@ export async function handleOpened(tabId: Int) {
   };
   await session_storage_delete(`open:${tabId}`);
 
-  const { serverUrl, directArchiveMode, directArchiveDelaySec, defaultTags } =
+  const { serverUrl, directArchiveMode, directArchiveDelaySec, defaultTags, token } =
     await getExtensionSettings();
   const serverUnconfigured = errorIfServerUnconfigured({ serverUrl }, log);
   if (serverUnconfigured !== null) return serverUnconfigured;
@@ -492,7 +392,12 @@ export async function handleOpened(tabId: Int) {
     // Prompt mode: offer a tag chip row (site's current/default tags, preselected)
     // before confirming; chosen tags are sent with ARCHIVE_FROM_PAGE.
     const defaults = mergeTagNames(Vec.from(defaultTags), opened?.tags ?? []);
-    const [page, error] = await pageLookup(tabId);
+
+    const [urlToLookUp, error2] = await extractTabUrl(tabId, log);
+    if (error2) return wrapErr(error2);
+    const url = canonicalizeUrl(urlToLookUp);
+
+    const [page, error] = await pageLookup(url, { serverUrl, token });
     const siteTags = error === null && page ? page.tags : [];
     injectBanner(tabId, {
       kind: "",
@@ -523,7 +428,7 @@ export async function testPageStatus(
 
   const reqUrl = createUrl(url, "/api/pages/lookup");
   reqUrl.searchParams.set("url", queryUrl);
-  const [response, error] = await request<ApiPageDetail>(reqUrl, {
+  const [response, error] = await reqwest<ApiPageDetail>(reqUrl, {
     token,
     timeoutMs: 20000,
   });
