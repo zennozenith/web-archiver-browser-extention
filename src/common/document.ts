@@ -4,23 +4,17 @@ const log = rootLog.child("dom");
 
 export function q<T extends Element>(root: ParentNode, sel: string): T {
   const el = root.querySelector<T>(sel);
-  if (!el) throw new Error(`${root} missing ${sel}`);
+  if (!el) throw new Error(`Selector not found: ${sel}`);
   return el;
 }
 
 export function getElementById<T extends HTMLElement>(id: string, type: { new (): T }): T {
-  const element = document.getElementById(id.startsWith("#") ? id.slice(1, id.length) : id);
-
-  if (element instanceof type) {
-    return element;
-  } else {
-    log.warn(
-      `getElementById: #${id} is ${element ? `not a ${type.name}` : "missing from the document"}`,
-      element,
-    );
+  const el = document.getElementById(id.startsWith("#") ? id.slice(1) : id);
+  if (!(el instanceof type)) {
+    log.error(`#${id} ${el ? `is not a ${type.name}` : "is missing from the document"}`);
+    throw new Error(`#${id} ${el ? `is not a ${type.name}` : "is missing from the document"}`);
   }
-  return element as T;
-  // return element instanceof type ? element : null;
+  return el;
 }
 
 export function setElementText(el: Element, text: string, cls: string = ""): void {

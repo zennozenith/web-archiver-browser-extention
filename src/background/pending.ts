@@ -36,6 +36,7 @@ export interface PendingDto {
 export interface PendingInStorage {
   fetchedAt: UnixEpochSeconds;
   total: number;
+  hasMore: boolean; //  server has more items than were returned
   items: PendingDto[];
   error?: string;
 }
@@ -45,10 +46,15 @@ export type RefreshPending = Awaited<ReturnType<typeof refreshPending>>;
 
 export async function getPendingFromStorage() {
   const { pending } = (await browser.storage.local.get({ pending: null })) as {
-    pending: PendingInStorage;
+    pending: PendingInStorage | null;
   };
-  if (pending.error !== undefined) {
-    return err({ logger: log, reason: "pending_error", detail: pending.error });
+
+  if (pending === null) {
+    return err({
+      logger: log,
+      reason: "pending_not_fetched",
+      detail: "Pending list has not been fetched yet",
+    });
   }
   return ok<PendingInStorage>(pending);
 }
@@ -58,7 +64,7 @@ export async function getPendingFromStorage() {
 export async function refreshPending() {
   const { serverUrl, token } = await getExtensionSettings();
   const [_, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
-  if (serverUnconfigured !== null) return err(serverUnconfigured);
+  if (serverUnconfigured !== null) return wrapErr(serverUnconfigured);
 
   const [res, resError] = await reqwest<Page<PendingDto>>(createUrl(serverUrl, "/api/pending"), {
     token,
@@ -78,14 +84,15 @@ export async function refreshPending() {
     data = {
       fetchedAt: nowUnixEpochSeconds(),
       total: res.items.length,
+      hasMore: res.nextCursor !== null,
       items: res.items,
       error: undefined,
     };
   } else {
-    // Keep the last good list, surface the error to the popup.
     data = {
       fetchedAt: nowUnixEpochSeconds(),
       total: previous?.total ?? 0,
+      hasMore: previous?.hasMore ?? false,
       items: previous?.items ?? [],
       error: resError.detail,
     };
@@ -106,7 +113,7 @@ export async function addPending(
 ) {
   const { serverUrl, token } = await getExtensionSettings();
   const [_, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
-  if (serverUnconfigured !== null) return err(serverUnconfigured);
+  if (serverUnconfigured !== null) return wrapErr(serverUnconfigured);
 
   const res = await reqwest<PendingDto>(createUrl(serverUrl, "/api/pending"), {
     method: "POST",

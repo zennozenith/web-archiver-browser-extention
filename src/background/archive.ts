@@ -310,6 +310,8 @@ async function archiveTab(tabId: Int, { tags }: { tags?: Vec<IdLessTag> } = {}) 
   }
 }
 
+export type ArchiveTab = Awaited<ReturnType<typeof archiveWithFeedback>>;
+
 export async function archiveWithFeedback(
   tabId: Int,
   { toast, tags }: { toast: boolean; tags?: Vec<IdLessTag> },

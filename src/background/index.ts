@@ -16,8 +16,8 @@ import {
 } from "@common/settings";
 import { applyStatusBadge } from "./badge";
 import { TestEndpointResponse } from "./reqwest";
-import { pageLookupFull } from "./page";
-import { setLocalPageTag, setRemotePageTag } from "./tags";
+import { pageLookupFull, statusCacheKey } from "./page";
+import { getLocalPageTags, setLocalPageTag, setRemotePageTag } from "./tags";
 
 /* Popup/options pages forward their log entries here so everything shows up
    in this (service worker) console. */
@@ -252,7 +252,7 @@ registerHandlers({
   REFRESH_PENDING: async () => {
     return await refreshPending();
   },
-  SET_PAGE_TAGS: async ({ idOrUrl, tags }, sender) => {
+  SET_PAGE_TAGS: async ({ idOrUrl, tags, url }) => {
     if (typeof idOrUrl === "string") {
       return setLocalPageTag(idOrUrl, tags);
     }
@@ -260,22 +260,28 @@ registerHandlers({
     const result = await setRemotePageTag(idOrUrl, tags);
     const [, error] = result;
 
-    // Tags are site-wide: after a successful change, drop the cached status so
-    // the next GET_ARCHIVE for this tab returns the new tag list.
-    if (!error && sender?.tab?.id !== undefined) {
-      await session_storage_delete(`status:${sender.tab.id}`);
+    // Tags are site-wide: drop the cached status so the next lookup sees the new list.
+    if (!error) {
+      try {
+        await session_storage_delete(await statusCacheKey(canonicalizeUrl(url)));
+      } catch (e) {
+        log.warn("Cannot invalidate status cache", e);
+      }
     }
     return result;
+  },
+
+  GET_LOCAL_TAGS: ({ url }) => getLocalPageTags(url),
+
+  ARCHIVE_TAB: async ({ tabId, tags }) => {
+    // `tags` is optional: when given, they are sent along with the archive request
+    // (the server merges them into the site's existing tags, creating unknown ones).
+    return await archiveWithFeedback(tabId, { toast: false, tags });
   },
 
   // // TODO: rename update pending
   // SET_PENDING_TAGS: async ({ id, tags }) => {
   //   return await updatePendingTags(id, { tags });
-  // },
-  // ARCHIVE_TAB: async ({ tabId, tags }) => {
-  //   // `tags` is optional: when given, they are sent along with the archive request
-  //   // (the server merges them into the site's existing tags, creating unknown ones).
-  //   return await archiveWithFeedback(tabId, { toast: false, tags });
   // },
 
   // OPEN_AND_ARCHIVE: async ({ url, tags }) => {

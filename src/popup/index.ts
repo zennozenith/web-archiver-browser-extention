@@ -3,260 +3,288 @@ import { getElementById, q } from "@common/document";
 import { SendToBackground, sendToBackground } from "@common/messaging";
 import { settingsFromStorageSetting } from "@common/settings";
 import { ApiCaptureSummary, ApiPageDetail } from "@src/background/page";
+import type { PendingDto } from "@src/background/pending";
+import { IdLessTag, TagStore } from "@src/background/tags";
 import { Int64, Page, UrlStr } from "@common/types";
 import { formatTimeFromSec, timeAgoFromSec, toDateFromSec } from "@common/time";
-import { IdLessTag, TagStore } from "@src/background/tags";
 
 const log = rootLog.child("popup");
 
+const MAX_VERSIONS_SHOWN = 20;
+const SPINNER_DELAY_MS = 300;
+
+type LookupResult = SendToBackground<"PAGE_LOOKUP_FULL">;
+type PendingResult = SendToBackground<"GET_PENDING">;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
 function openTab(url: UrlStr) {
-  browser.tabs.create({ url });
+  void browser.tabs.create({ url });
   window.close();
 }
 
-class Loading {
-  private static spinnerEl = document.getElementById("spinner") as HTMLDivElement;
-  // private static hidden = Loading.spinnerEl.classList.contains("hidden");
-  private static changedCounter = 0;
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
 
-  public static show() {
-    const changeCounter = Loading.changedCounter;
-    setTimeout(() => {
-      if (changeCounter === Loading.changedCounter) {
-        Loading.spinnerEl.classList.remove("hidden");
-        // Loading.changedCounter += 1;
-      }
-    }, 300);
-  }
+function setTextWithTitle(el: HTMLElement, text: string) {
+  el.textContent = text;
+  el.title = text;
+}
 
-  public static hide() {
-    Loading.spinnerEl.classList.add("hidden");
-    Loading.changedCounter += 1;
+function show(el: HTMLElement, visible: boolean) {
+  el.classList.toggle("hidden", !visible);
+}
+
+/** hostname + pathname, falling back to the raw string if it isn't a valid URL. */
+function displayUrl(raw: string): string {
+  try {
+    const u = new URL(raw);
+    return u.hostname + u.pathname;
+  } catch {
+    return raw;
   }
 }
 
-class Notice {
-  private static noticePermissionEl = document.getElementById(
-    "notice-permission",
-  ) as HTMLDivElement;
-  private static noticeNoServerEl = document.getElementById("notice-no-server") as HTMLDivElement;
-  private static noticeNoTabId = document.getElementById("notice-no-tab-id") as HTMLDivElement;
+/** Single place that interprets the lookup result for the whole popup. */
+type LookupState =
+  | { kind: "archived"; page: ApiPageDetail; versions: Page<ApiCaptureSummary> }
+  | { kind: "not_archived" }
+  | { kind: "unavailable"; reason: string; detail: string };
 
-  public static init({
-    hasPermission,
-    serverUrl,
-    hasTabId,
-  }: {
-    hasPermission: boolean;
-    serverUrl?: URL;
-    hasTabId: boolean;
-  }) {
-    Notice.noticePermissionEl.classList.toggle("hidden", hasPermission);
-    Notice.noticeNoTabId.classList.toggle("hidden", hasTabId);
-    Notice.noticeNoServerEl.classList.toggle("hidden", serverUrl !== undefined);
+function toLookupState([data, error]: LookupResult): LookupState {
+  if (error) {
+    return error.reason === "not_found"
+      ? { kind: "not_archived" }
+      : { kind: "unavailable", reason: error.reason, detail: error.detail };
+  }
+  const [page, versions] = data;
+  return { kind: "archived", page, versions };
+}
+
+/** TODO: build the real capture URL once the server route is known. */
+function captureHref(_version: ApiCaptureSummary): UrlStr | null {
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Loading spinner (only shown if loading takes longer than SPINNER_DELAY_MS)
+// ---------------------------------------------------------------------------
+
+class Loading {
+  private static spinner = getElementById("spinner", HTMLDivElement);
+  private static timer: number | undefined;
+
+  static show() {
+    clearTimeout(Loading.timer);
+    Loading.timer = window.setTimeout(
+      () => Loading.spinner.classList.remove("hidden"),
+      SPINNER_DELAY_MS,
+    );
   }
 
-  // noticePermissionEl.classList.toggle("hidden", hasPermission);
-  // noticeNoServerEl.classList.toggle("hidden", !isNotConfiguredAtAll);
+  static hide() {
+    clearTimeout(Loading.timer);
+    Loading.spinner.classList.add("hidden");
+  }
+}
 
-  //
-  //   // Last Archived notice
-  //   currentLastArchived.classList.remove("hidden");
-  //   currentLastArchived.textContent = `Last archived ${formatTime(archiveStatus?.lastArchivedAt)} (${timeAgo(archiveStatus?.lastArchivedAt)})`;
-  //
-  //
-  //     // Overflow notice
-  //     const hasOverflow = pending.total > pending.items.length;
-  //     Pending.pendingOverflow.classList.toggle("hidden", !hasOverflow);
-  //     if (hasOverflow) {
-  //       Pending.pendingOverflow.textContent = `+${pending.total - pending.items.length} more not shown (see list limit in preferences)`;
-  //     }
-  //
-  // uiBus.on("render:notice", () => {
-  //   noticePermissionEl.classList.toggle("hidden", hasPermission);
-  //   const isNotConfiguredAtAll =
-  //     !extensionSettings.server &&
-  //     !extensionSettings.archive &&
-  //     !extensionSettings.pending &&
-  //     !extensionSettings.check;
-  //   noticeNoServerEl.classList.toggle("hidden", !isNotConfiguredAtAll);
-  //   const isMissingServer = !extensionSettings.server && !isNotConfiguredAtAll;
-  //   errorEndpointEl.classList.toggle("hidden", !isMissingServer);
-  // });
-  //
+// ---------------------------------------------------------------------------
+// Notices
+// ---------------------------------------------------------------------------
+
+class Notice {
+  private static permission = getElementById("notice-permission", HTMLDivElement);
+  private static noServer = getElementById("notice-no-server", HTMLDivElement);
+  private static noTabId = getElementById("notice-no-tab-id", HTMLDivElement);
+
+  static init(opts: { hasPermission: boolean; serverUrl?: URL; hasTabId: boolean }) {
+    show(Notice.permission, !opts.hasPermission);
+    show(Notice.noTabId, !opts.hasTabId);
+    show(Notice.noServer, opts.serverUrl === undefined);
+  }
 }
 
 class ErrorUi {
-  // TODO
-  public static push(...args: any[]) {
+  // TODO: surface errors in the UI
+  static push(...args: unknown[]) {
     log.error(...args);
   }
 }
 
-class CurrentPage {
-  // private section = getElementById("card-current-section", HTMLDivElement);
-  private unarchivable = getElementById("current-unarchivable", HTMLDivElement);
+// ---------------------------------------------------------------------------
+// Current page
+// ---------------------------------------------------------------------------
 
+class CurrentPage {
+  private unarchivable = getElementById("current-unarchivable", HTMLDivElement);
   private meta = getElementById("current-meta", HTMLDivElement);
   private title = getElementById("current-title", HTMLDivElement);
   private url = getElementById("current-url", HTMLDivElement);
+
   private statusContainer = getElementById("current-status-pill-container", HTMLDivElement);
   private statusPill = getElementById("current-status-pill", HTMLSpanElement);
   private recheck = getElementById("current-btn-recheck", HTMLButtonElement);
 
   private errorContainer = getElementById("current-error-container", HTMLDivElement);
+  private lastArchived = getElementById("current-last-archived", HTMLDivElement);
+
   private versionItemTpl = getElementById("template-version", HTMLTemplateElement);
   private versionList = getElementById("current-versions-list", HTMLUListElement);
   private versionOverflow = getElementById("current-versions-overflow", HTMLDivElement);
-  private lastArchived = getElementById("current-last-archived", HTMLDivElement);
-  // // private flash = getElementById("current-flash", HTMLDivElement);
 
   private archiveBtn = getElementById("btn-archive", HTMLButtonElement);
   private archiveBtnText = getElementById("btn-archive-text", HTMLSpanElement);
   private archiveBtnShortcut = getElementById("btn-archive-shortcut", HTMLSpanElement);
 
-  // private tagsContainer = getElementById("current-tags", HTMLDivElement);
-  //
-
-  // private isArchivable: boolean = false;
-
   constructor(
     tab: chrome.tabs.Tab,
-    pageResult: SendToBackground<"PAGE_LOOKUP_FULL">,
+    state: LookupState,
     archiveShortcut: string,
+    private readonly getTags: () => readonly IdLessTag[],
   ) {
-    let isArchivable = true;
-    let hideStatusPill = false;
-    let statusPillClass: "ok" | "err" | "warn" | "muted" = "muted";
-    let statusPillText: string = "Status check not configured";
-    let hideRecheck = false;
-    let archiveButtonText = "";
-    // let versions
+    const archivable = state.kind !== "unavailable";
+    const page = state.kind === "archived" ? state.page : null;
 
-    const [pageAndVersion, error] = pageResult;
-    const [page, versions] = pageAndVersion ?? [null, null];
+    this.renderHeader(tab, page);
+    this.renderStatus(state);
+    this.renderArchiveButton(archivable, page !== null, archiveShortcut);
+    this.renderLastArchived(page);
+    this.renderVersions(state);
 
-    if (error) {
-      switch (error.reason) {
-        case "tab_url_unarchivable":
-          hideRecheck = true;
-          hideStatusPill = true;
-          isArchivable = false;
-          statusPillClass = "err";
-          break;
-        case "not_found":
-          isArchivable = true;
-          statusPillClass = "warn";
-          statusPillText = "Not archived";
-          break;
-        default:
-          hideRecheck = true;
-          hideStatusPill = true;
-          isArchivable = false;
-          statusPillClass = "err";
-          statusPillText = error.reason;
-          break;
-      }
-    }
+    show(this.unarchivable, !archivable);
+    show(this.meta, archivable);
+    // textContent, not innerHTML: error details are not trusted HTML
+    this.errorContainer.textContent = state.kind === "unavailable" ? state.detail : "";
 
-    if (error && !isArchivable) {
-      this.errorContainer.innerHTML = error.detail;
-      // this.errorContainer.innerHTML = "";
-      // this.errorContainer.appendChild(errorBox(archiveStatus.error));
-    }
+    if (archivable && tab.id !== undefined) this.bindActions(tab.id);
+  }
 
-    if (page) {
-      const count = page.captureCount;
-      statusPillClass = "ok";
-      statusPillText = `Archived · ${count} version${count === 1 ? "" : "s"}`;
+  private bindActions(tabId: number) {
+    this.recheck.addEventListener("click", () => location.reload());
 
-      this.lastArchived.classList.remove("hidden");
-      if (page.lastCapturedAt) {
-        this.lastArchived.textContent = `Last archived ${formatTimeFromSec(page.lastCapturedAt)} (${timeAgoFromSec(page.lastCapturedAt)})`;
-      }
-      archiveButtonText = "Archive new version";
-    } else {
-      archiveButtonText = "Archive this page";
-    }
+    this.archiveBtn.addEventListener("click", async () => {
+      this.archiveBtn.disabled = true;
+      show(this.errorContainer, false);
 
-    this.recheck.disabled = !isArchivable;
+      // Read at click time so tags edited just before archiving are included.
+      const [, error] = await sendToBackground("ARCHIVE_TAB", {
+        tabId,
+        tags: [...this.getTags()],
+      });
 
-    this.archiveBtn.disabled = !isArchivable;
-    this.archiveBtnText.textContent = archiveButtonText;
-    this.archiveBtnShortcut.textContent = archiveShortcut;
-
-    this.statusContainer.classList.toggle("hidden", hideStatusPill);
-    this.statusPill.className = `pill ${statusPillClass}`;
-    this.statusPill.textContent = statusPillText;
-
-    this.recheck.classList.toggle("hidden", hideRecheck);
-    this.recheck.disabled = !isArchivable;
-
-    this.unarchivable.classList.toggle("hidden", isArchivable);
-    this.meta.classList.toggle("hidden", !isArchivable);
-
-    this.title.textContent = page?.title || page?.url || tab.title || tab.url || "No Title";
-    this.title.title = page?.title || page?.url || tab.title || tab.url || "No Title";
-    this.url.textContent = page?.url || tab.url || "No Url";
-    this.url.title = page?.url || tab.url || "No Url";
-
-    this.versionList.innerHTML = "";
-
-    if (!versions) {
-      this.versionList.classList.add("hidden");
-      this.versionOverflow.classList.add("hidden");
-      this.lastArchived.classList.add("hidden");
-    } else {
-      if (versions.items.length > 20) {
-        this.versionOverflow.classList.remove("hidden");
-        this.versionOverflow.textContent = `Showing newest 20 of ${versions.items.length}`;
-      } else {
-        this.versionOverflow.classList.add("hidden");
+      if (error) {
+        ErrorUi.push("Cannot archive page,", error.detail);
+        this.errorContainer.textContent = `Couldn't archive: ${error.detail}`;
+        show(this.errorContainer, true);
+        this.archiveBtn.disabled = false;
+        return;
       }
 
-      const total = versions.items.length > 20 ? 20 : versions.items.length;
-      const frag = document.createDocumentFragment();
-      for (let i = 0; i < total; i++) {
-        frag.appendChild(this.renderVersion(versions.items[i], i, total));
-      }
-      this.versionList.appendChild(frag);
+      location.reload(); // re-lookup to show the new version
+    });
+  }
+
+  private renderHeader(tab: chrome.tabs.Tab, page: ApiPageDetail | null) {
+    setTextWithTitle(this.title, page?.title || page?.url || tab.title || tab.url || "No Title");
+    setTextWithTitle(this.url, page?.url || tab.url || "No Url");
+  }
+
+  private renderStatus(state: LookupState) {
+    const unavailable = state.kind === "unavailable";
+    show(this.statusContainer, !unavailable);
+    show(this.recheck, !unavailable);
+    this.recheck.disabled = unavailable;
+
+    if (state.kind === "archived") {
+      this.statusPill.className = "pill ok";
+      this.statusPill.textContent = `Archived · ${plural(state.page.captureCount, "version")}`;
+    } else if (state.kind === "not_archived") {
+      this.statusPill.className = "pill warn";
+      this.statusPill.textContent = "Not archived";
     }
   }
 
-  private renderVersion(version: ApiCaptureSummary, index: number, total: number): HTMLLIElement {
+  private renderArchiveButton(archivable: boolean, isArchived: boolean, shortcut: string) {
+    this.archiveBtn.disabled = !archivable;
+    this.archiveBtnText.textContent = isArchived ? "Archive new version" : "Archive this page";
+    this.archiveBtnShortcut.textContent = shortcut;
+  }
+
+  private renderLastArchived(page: ApiPageDetail | null) {
+    const ts = page?.lastCapturedAt;
+    show(this.lastArchived, !!ts);
+    if (ts) {
+      this.lastArchived.textContent = `Last archived ${formatTimeFromSec(ts)} (${timeAgoFromSec(ts)})`;
+    }
+  }
+
+  private renderVersions(state: LookupState) {
+    this.versionList.replaceChildren();
+
+    if (state.kind !== "archived") {
+      show(this.versionList, false);
+      show(this.versionOverflow, false);
+      return;
+    }
+
+    show(this.versionList, true);
+
+    // Assumes the API returns versions newest-first.
+    const shown = state.versions.items.slice(0, MAX_VERSIONS_SHOWN);
+
+    // captureCount is the real total; items may be paginated.
+    const total = state.page.captureCount;
+    const overflow = total > shown.length;
+    show(this.versionOverflow, overflow);
+    if (overflow) {
+      this.versionOverflow.textContent = `Showing newest ${shown.length} of ${total}`;
+    }
+
+    const frag = document.createDocumentFragment();
+    for (const version of shown) frag.appendChild(this.renderVersion(version));
+    this.versionList.appendChild(frag);
+  }
+
+  private renderVersion(version: ApiCaptureSummary): HTMLLIElement {
     const frag = this.versionItemTpl.content.cloneNode(true) as DocumentFragment;
     const li = q<HTMLLIElement>(frag, "li");
     const link = q<HTMLAnchorElement>(frag, ".ver-link");
     const timeEl = q<HTMLTimeElement>(frag, ".ver-time");
     const agoEl = q<HTMLSpanElement>(frag, ".ver-ago");
 
-    const label = `${total - index}`;
+    link.textContent = `v${version.version}`;
 
-    if (version.id) {
-      // TODO: actual url
-      link.textContent = label;
-      link.href = String(version.id); // TODO: actual url
+    const href = captureHref(version);
+    if (href) {
+      link.href = href;
       link.addEventListener("click", (e) => {
         e.preventDefault();
-        openTab(""); // TODO: actual url
+        openTab(href);
       });
     } else {
-      // static variant: keep the <a>, drop href → styled as non-link via :not([href])
+      // No href → styled as a non-link via :not([href])
       link.removeAttribute("href");
-      link.textContent = String(version.version) || `v${label}`;
       link.setAttribute("aria-disabled", "true");
     }
 
+    const iso = toDateFromSec(version.capturedAt).toISOString();
     timeEl.textContent = formatTimeFromSec(version.capturedAt);
-    timeEl.title = toDateFromSec(version.capturedAt).toISOString();
-    timeEl.setAttribute("datetime", toDateFromSec(version.capturedAt).toISOString());
+    timeEl.title = iso;
+    timeEl.dateTime = iso;
 
     agoEl.textContent = timeAgoFromSec(version.capturedAt);
-    agoEl.title = toDateFromSec(version.capturedAt).toISOString();
+    agoEl.title = iso;
 
     return li;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Pending list
+// ---------------------------------------------------------------------------
 
 class Pending {
   private heading = getElementById("pending-heading", HTMLHeadingElement);
@@ -269,121 +297,101 @@ class Pending {
   private overflow = getElementById("pending-overflow", HTMLDivElement);
   private itemTemplate = getElementById("template-pending-list-item", HTMLTemplateElement);
 
-  public constructor(pendingResult: SendToBackground<"GET_PENDING">) {
-    this.render(pendingResult);
+  constructor(result: PendingResult) {
+    this.render(result);
+    this.btnRefresh.addEventListener("click", () => void this.refresh());
+
+    // First run: nothing cached yet, so fetch automatically.
+    if (result[1]?.reason === "pending_not_fetched") void this.refresh();
   }
 
   async refresh() {
     log.debug("Refreshing pending list");
-
-    this.btnRefresh.disabled = true;
-    this.refreshIcon.classList.toggle("spin", true);
-
-    await sendToBackground("REFRESH_PENDING");
-    this.render(await sendToBackground("GET_PENDING"));
-
-    this.refreshIcon.classList.toggle("spin", false);
-    this.btnRefresh.disabled = false;
+    this.setRefreshing(true);
+    try {
+      const [, refreshError] = await sendToBackground("REFRESH_PENDING");
+      if (refreshError) ErrorUi.push("Cannot refresh pending,", refreshError.detail);
+      // Render regardless: GET_PENDING reports the stored error state too.
+      this.render(await sendToBackground("GET_PENDING"));
+    } finally {
+      this.setRefreshing(false);
+    }
   }
 
-  render(pendingResult: SendToBackground<"GET_PENDING">) {
-    const [pending, error] = pendingResult;
+  private setRefreshing(refreshing: boolean) {
+    this.btnRefresh.disabled = refreshing;
+    this.refreshIcon.classList.toggle("spin", refreshing);
+  }
+
+  private render([pending, error]: PendingResult) {
     if (error) {
-      ErrorUi.push("Cannot get pending, ", error.detail);
-      this.fetchedTime.classList.add("hidden");
-      this.errorContainer.innerHTML = ""; // TODO:
-      // Pending Error
-      // if (pending.error) {
-      //   this.errorContainer.appendChild(errorBox("Pending list: " + pending.error));
-      // }
+      // Don't shout on first run; refresh() is already running.
+      if (error.reason !== "pending_not_fetched") {
+        ErrorUi.push("Cannot get pending,", error.detail);
+        this.errorContainer.textContent = `Couldn't load pending list: ${error.detail}`;
+      }
+      show(this.fetchedTime, false);
       return;
     }
 
-    this.errorContainer.innerHTML = "";
+    // Last refresh failed, but we still have the previous list to show.
+    this.errorContainer.textContent = pending.error ? `Last refresh failed: ${pending.error}` : "";
+
+    this.heading.textContent = `Pending(${pending.total}${pending.hasMore ? "+" : ""})`;
 
     this.heading.textContent = `Pending(${pending.total})`;
     this.fetchedTime.textContent = timeAgoFromSec(pending.fetchedAt);
     this.fetchedTime.title = formatTimeFromSec(pending.fetchedAt);
-    this.fetchedTime.classList.remove("hidden");
+    show(this.fetchedTime, true);
 
-    // Pending Empty Check
-    const isEmpty = pending && !pending.items.length && !pending.error;
-    this.empty.classList.toggle("hidden", !isEmpty);
-
-    // Pending Items List
-    this.list.innerHTML = "";
+    show(this.empty, pending.items.length === 0);
 
     const frag = document.createDocumentFragment();
+    for (const item of pending.items) frag.appendChild(this.renderItem(item));
+    this.list.replaceChildren(frag);
 
-    if (pending.items.length) {
-      pending.items.forEach((it) => {
-        // --- Compute label (same logic as before) ---
-        let label = it.title;
-        try {
-          const u = new URL(it.url);
-          label = label || u.hostname + u.pathname;
-        } catch {}
-
-        // --- Clone template ---
-        const clone = this.itemTemplate.content.cloneNode(true) as DocumentFragment;
-
-        const titleDiv = q<HTMLDivElement>(clone, ".title");
-        const urlDiv = q<HTMLDivElement>(clone, ".url");
-        const tagsDiv = q<HTMLDivElement>(clone, ".small.muted");
-        // const tagBtn = q<HTMLButtonElement>(clone, ".tags-btn");
-        // const actionBtn = q<HTMLButtonElement>(clone, ".archive-btn");
-
-        // --- Fill text content ---
-        titleDiv.title = it.title || it.url;
-        titleDiv.textContent = label;
-
-        urlDiv.title = it.url;
-        urlDiv.textContent = it.url + (it.createdAt ? ` · ${timeAgoFromSec(it.createdAt)}` : "");
-
-        const tags = it.tags.map((v) => v.name) ?? [];
-        tagsDiv.textContent = tags.length ? `Tags: ${tags.join(", ")}` : "No tags";
-
-        // TODO
-        // // --- Attach listeners ---
-        // tagBtn.addEventListener("click", async () => {
-        //   const raw = prompt("Tags for this page (comma separated)", tags.join(", ")) ?? "";
-        //   const next = raw
-        //     .split(",")
-        //     .map((t) => t.trim().slice(0, 64))
-        //     .filter(Boolean);
-        //   const result = await sendToBackground("SET_PENDING_TAGS", { id: it.id, tags: next });
-        //   if (result.ok === false) {
-        //     log.error("Cannot save pending tags,", result.detail);
-        //     uiBus.emit("error:any", { detail: result.detail });
-        //     return;
-        //   }
-        //   await sendToBackground("REFRESH_PENDING");
-        //   appBus.emit("pending:check");
-        // });
-
-        // actionBtn.addEventListener("click", async () => {
-        //   log.debug("Pending list archive requested", { url: it.url });
-        //   await sendToBackground("OPEN_AND_ARCHIVE", { url: it.url });
-        //   window.close();
-        // });
-
-        // --- Insert ---
-        frag.appendChild(clone);
-      });
-      this.list.appendChild(frag);
-    }
-
-    const hasOverflow = pending.total > pending.items.length;
-    this.overflow.classList.toggle("hidden", !hasOverflow);
-    if (hasOverflow) {
-      this.overflow.textContent = `+${pending.total - pending.items.length} more not shown (see list limit in preferences)`;
+    show(this.overflow, pending.hasMore);
+    if (pending.hasMore) {
+      this.overflow.textContent = "More pending items not shown (see list limit in preferences)";
     }
   }
+
+  private renderItem(item: PendingDto): DocumentFragment {
+    const clone = this.itemTemplate.content.cloneNode(true) as DocumentFragment;
+    const titleEl = q<HTMLDivElement>(clone, ".title");
+    const urlEl = q<HTMLDivElement>(clone, ".url");
+    const tagsEl = q<HTMLDivElement>(clone, ".small.muted");
+
+    titleEl.title = item.title || item.url;
+    titleEl.textContent = item.title || displayUrl(item.url);
+
+    urlEl.title = item.url;
+    urlEl.textContent = `${item.url} · ${timeAgoFromSec(item.createdAt)}`;
+
+    const tagNames = item.tags.map((t) => t.name);
+    tagsEl.textContent = tagNames.length ? `Tags: ${tagNames.join(", ")}` : "No tags";
+
+    // TODO: tag-edit and archive buttons for pending items
+    return clone;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tags
+// ---------------------------------------------------------------------------
+
+/** Parses "name" or "name:color" into a tag. Returns null for an empty name. */
+function parseTagInput(raw: string): IdLessTag | null {
+  const sep = raw.indexOf(":");
+  const name = (sep === -1 ? raw : raw.slice(0, sep)).trim();
+  if (!name) return null;
+  const color = sep === -1 ? null : raw.slice(sep + 1).trim() || null;
+  return { name, color };
 }
 
 class Tag {
   private list = getElementById("current-tags", HTMLDivElement);
-  private errorEl = getElementById("current-tags-error", HTMLDivElement); // add to HTML
+  private errorEl = getElementById("current-tags-error", HTMLDivElement);
   private input = getElementById("current-tag-input", HTMLInputElement);
   private btnAddTag = getElementById("current-tag-add", HTMLButtonElement);
 
@@ -392,24 +400,26 @@ class Tag {
 
   private tagStore = new TagStore();
   private pageId: Int64 | null = null;
-  private url: string;
   private busy = false;
 
-  constructor(url: string, pageResult: SendToBackground<"PAGE_LOOKUP_FULL">) {
-    this.url = url;
-    const [pageAndVersions, error] = pageResult;
-
-    if (error) {
-      if (error.reason !== "not_found") {
-      }
-      // unrecoverable: leave UI inert
-    } else {
-      const [page] = pageAndVersions;
-      this.tagStore.tags = page.tags;
-      this.pageId = page.id;
+  constructor(
+    private readonly url: string,
+    state: LookupState,
+  ) {
+    if (state.kind === "archived") {
+      this.tagStore.tags = state.page.tags;
+      this.pageId = state.page.id;
     }
+    // TODO: for "not_archived", load locally stored tags (needs a background message).
 
-    this.renderTagChips();
+    this.renderChips();
+
+    if (state.kind === "unavailable") {
+      // Can't save tags without a usable lookup; leave the UI inert.
+      this.input.disabled = true;
+      this.btnAddTag.disabled = true;
+      return;
+    }
 
     this.btnAddTag.addEventListener("click", () => void this.add(this.input.value));
     this.input.addEventListener("keydown", (e) => {
@@ -420,83 +430,26 @@ class Tag {
     });
   }
 
-  private renderTagChips(): void {
-    this.list.replaceChildren();
-
-    if (this.tagStore.length === 0) {
-      this.list.appendChild(this.emptyTpl.content.cloneNode(true));
+  async loadLocalTags() {
+    const [tags, error] = await sendToBackground("GET_LOCAL_TAGS", { url: this.url });
+    if (error) {
+      ErrorUi.push("Cannot load local tags,", error.detail);
       return;
     }
-
-    const frag = document.createDocumentFragment();
-    for (const t of this.tagStore.tags) {
-      frag.appendChild(this.renderTagChip(t.name, () => void this.remove(t.name)));
-    }
-    this.list.appendChild(frag);
+    this.tagStore.tags = tags;
+    this.renderChips();
   }
 
-  private renderTagChip(name: string, onRemove: () => void): HTMLElement {
-    const frag = this.chipTpl.content.cloneNode(true) as DocumentFragment;
-    const chip = q<HTMLElement>(frag, ".tag-chip");
-    const nameEl = q<HTMLSpanElement>(frag, ".tag-chip-name");
-    const rm = q<HTMLButtonElement>(frag, ".tag-chip-remove");
-
-    nameEl.textContent = name;
-    rm.title = `Remove tag "${name}" from this site`;
-    rm.setAttribute("aria-label", rm.title);
-    rm.disabled = this.busy;
-    rm.addEventListener("click", onRemove);
-
-    return chip;
-  }
-
-  private setBusy(busy: boolean): void {
-    this.busy = busy;
-    this.btnAddTag.disabled = busy;
-    this.input.disabled = busy;
-    this.renderTagChips(); // refresh chips' disabled state
-  }
-
-  private showError(message: string | null): void {
-    this.errorEl.textContent = message ?? "";
-    this.errorEl.hidden = message === null;
-    this.errorEl.classList.toggle("hidden", message === null);
-  }
-
-  /** Persist `next`. The store is only updated if the save succeeds,
-   *  so a failure leaves the UI consistent with the server. */
-  private async commit(next: readonly IdLessTag[]): Promise<boolean> {
-    if (this.busy) return false;
-    this.showError(null);
-    this.setBusy(true);
-
-    try {
-      const [saved, error] = await sendToBackground("SET_PAGE_TAGS", {
-        idOrUrl: this.pageId ?? this.url,
-        tags: [...next],
-      });
-
-      if (error) {
-        log.error("Cannot save tags,", error.detail);
-        this.showError("Couldn't save tags. Please try again.");
-        return false;
-      }
-
-      this.tagStore.tags = saved;
-      return true;
-    } finally {
-      this.setBusy(false); // also re-renders
-    }
+  get currentTags(): IdLessTag[] {
+    return this.tagStore.tags; // already a copy
   }
 
   async add(raw: string): Promise<boolean> {
-    const sep = raw.indexOf(":");
-    const name = (sep === -1 ? raw : raw.slice(0, sep)).trim();
-    const color = sep === -1 ? null : raw.slice(sep + 1).trim() || null;
-    if (!name) return false;
+    const tag = parseTagInput(raw);
+    if (!tag) return false;
 
     const next = new TagStore(this.tagStore.tags);
-    next.upsertTag({ name, color });
+    next.upsertTag(tag);
 
     const ok = await this.commit(next.tags);
     if (ok) {
@@ -511,106 +464,148 @@ class Tag {
     next.removeTag(name);
     return this.commit(next.tags);
   }
+
+  /** Persists `next`; the store only changes on success so the UI never drifts from the server. */
+  private async commit(next: readonly IdLessTag[]): Promise<boolean> {
+    if (this.busy) return false;
+    this.showError(null);
+    this.setBusy(true);
+
+    try {
+      const [saved, error] = await sendToBackground("SET_PAGE_TAGS", {
+        idOrUrl: this.pageId ?? this.url,
+        tags: [...next],
+        url: this.url,
+      });
+
+      if (error) {
+        log.error("Cannot save tags,", error.detail);
+        this.showError("Couldn't save tags. Please try again.");
+        return false;
+      }
+
+      this.tagStore.tags = saved;
+      return true;
+    } finally {
+      this.setBusy(false);
+    }
+  }
+
+  private setBusy(busy: boolean) {
+    this.busy = busy;
+    this.btnAddTag.disabled = busy;
+    this.input.disabled = busy;
+    this.renderChips(); // refresh the chips' disabled state
+  }
+
+  private showError(message: string | null) {
+    this.errorEl.textContent = message ?? "";
+    show(this.errorEl, message !== null);
+  }
+
+  private renderChips() {
+    if (this.tagStore.length === 0) {
+      this.list.replaceChildren(this.emptyTpl.content.cloneNode(true));
+      return;
+    }
+
+    const frag = document.createDocumentFragment();
+    for (const t of this.tagStore.tags) frag.appendChild(this.renderChip(t.name));
+    this.list.replaceChildren(frag);
+  }
+
+  private renderChip(name: string): HTMLElement {
+    const frag = this.chipTpl.content.cloneNode(true) as DocumentFragment;
+    const chip = q<HTMLElement>(frag, ".tag-chip");
+    const nameEl = q<HTMLSpanElement>(frag, ".tag-chip-name");
+    const removeBtn = q<HTMLButtonElement>(frag, ".tag-chip-remove");
+
+    nameEl.textContent = name;
+    removeBtn.title = `Remove tag "${name}" from this site`;
+    removeBtn.setAttribute("aria-label", removeBtn.title);
+    removeBtn.disabled = this.busy;
+    removeBtn.addEventListener("click", () => void this.remove(name));
+
+    return chip;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Startup
+// ---------------------------------------------------------------------------
+
+async function hasAllUrlsPermission(): Promise<boolean> {
+  try {
+    return await browser.permissions.contains({ origins: ["<all_urls>"] });
+  } catch {
+    return true; // TODO: should this be false?
+  }
+}
+
+async function getArchiveShortcut(): Promise<string> {
+  try {
+    const commands = await browser.commands.getAll();
+    return commands.find((c) => c.name === "archive-page")?.shortcut || "";
+  } catch {
+    return "";
+  }
+}
+
+async function init() {
+  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  log.debug("Popup opened", { tabId: tab?.id, url: tab?.url, title: tab?.title });
+
+  const [hasPermission, shortcut, [storageSettings, settingsError]] = await Promise.all([
+    hasAllUrlsPermission(),
+    getArchiveShortcut(),
+    sendToBackground("GET_EXTENSION_SETTINGS"),
+  ]);
+
+  if (settingsError) {
+    ErrorUi.push("Cannot load extension settings,", settingsError.detail);
+    return;
+  }
+
+  const [settings, parseError] = settingsFromStorageSetting(storageSettings);
+  if (parseError) {
+    ErrorUi.push("Cannot parse extension settings,", parseError.detail);
+    return;
+  }
+
+  Notice.init({
+    hasPermission,
+    serverUrl: settings.serverUrl,
+    hasTabId: tab?.id !== undefined,
+  });
+
+  if (!tab || tab.id === undefined) return;
+
+  const [lookupResult, pendingResult] = await Promise.all([
+    sendToBackground("PAGE_LOOKUP_FULL", { tabId: tab.id }),
+    sendToBackground("GET_PENDING"),
+  ]);
+
+  const state = toLookupState(lookupResult);
+
+  const tagUi = tab.url ? new Tag(tab.url, state) : null;
+  if (tagUi && state.kind === "not_archived") await tagUi.loadLocalTags();
+
+  new CurrentPage(tab, state, shortcut, () => tagUi?.currentTags ?? []);
+  new Pending(pendingResult);
+
+  if (tab.url) {
+    const tags = new Tag(tab.url, state);
+    if (state.kind === "not_archived") await tags.loadLocalTags();
+  }
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
   Loading.show();
-
-  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  log.debug("Popup opened", { tabId: tab.id, url: tab.url, title: tab.title });
-
-  let hasPermission: boolean;
   try {
-    hasPermission = await browser.permissions.contains({ origins: ["<all_urls>"] });
-  } catch {
-    hasPermission = true; // TODO: false?
+    await init();
+  } catch (e) {
+    ErrorUi.push("Popup init failed", e);
+  } finally {
+    Loading.hide(); // runs on every early return too
   }
-
-  let shortcut: string = "";
-  try {
-    shortcut =
-      (await browser.commands.getAll()).find((c) => c.name === "archive-page")?.shortcut || "";
-  } catch {}
-
-  const [storageExtensionSettings, error] = await sendToBackground("GET_EXTENSION_SETTINGS");
-
-  if (error) {
-    // TODO:
-    return;
-  }
-
-  const [extensionSetting, error2] = settingsFromStorageSetting(storageExtensionSettings);
-  if (error2) {
-    // TODO:
-    return;
-  }
-
-  const { serverUrl } = extensionSetting;
-
-  Notice.init({
-    hasPermission,
-    serverUrl,
-    hasTabId: tab.id !== undefined,
-  });
-
-  if (tab.id === undefined) {
-    return;
-  }
-
-  const pageLookupResult = await sendToBackground("PAGE_LOOKUP_FULL", { tabId: tab.id });
-  const pendingResult = await sendToBackground("GET_PENDING");
-
-  handlePageLookupResult(pageLookupResult);
-
-  new CurrentPage(tab, pageLookupResult, shortcut);
-  new Pending(pendingResult);
-  if (tab.url) {
-    new Tag(tab.url, pageLookupResult);
-  }
-
-  Loading.hide();
 });
-
-type ArchiveState =
-  | ({ isArchivable: true } & (
-      | { isArchived: true; page: ApiPageDetail; versions: Page<ApiCaptureSummary> }
-      | { isArchived: false }
-    ))
-  | { isArchivable: false; reason: string; detail: string };
-
-function handlePageLookupResult(pageResult: SendToBackground<"PAGE_LOOKUP_FULL">): ArchiveState {
-  const [pageAndVersion, error] = pageResult;
-
-  if (error) {
-    switch (error.reason) {
-      case "no_tab_url":
-      case "no_tab_id":
-      case "tab_url_unarchivable":
-      case "tab_url_parse":
-        return {
-          isArchivable: false,
-          detail: error.detail,
-          reason: error.reason,
-        };
-      case "not_found":
-        return {
-          isArchivable: true,
-          isArchived: false,
-        };
-
-      default:
-        return {
-          isArchivable: true,
-          isArchived: false,
-        };
-    }
-  }
-
-  const [page, versions] = pageAndVersion ?? [null, null];
-  return {
-    isArchivable: true,
-    isArchived: true,
-    page,
-    versions,
-  };
-}

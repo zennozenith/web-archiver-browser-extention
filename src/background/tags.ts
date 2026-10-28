@@ -1,3 +1,5 @@
+import browser from "webextension-polyfill";
+
 import { ok, wrapErr } from "@common/error";
 import { log as rootLog } from "@common/log";
 import { reqwest } from "./reqwest";
@@ -133,6 +135,21 @@ export async function setLocalPageTag(url: string, tags: readonly IdLessTag[]) {
     return ok(clean);
   } catch (e) {
     log.error("Cannot save local tags", e);
+    return wrapErr({ reason: "storage", detail: String(e) });
+  }
+}
+
+export type GetLocalPageTags = Awaited<ReturnType<typeof getLocalPageTags>>;
+
+/** Read tags saved locally for a URL that isn't archived yet. */
+export async function getLocalPageTags(url: string) {
+  const key = `tags:${canonicalizeUrl(url)}`;
+  try {
+    const stored = await browser.storage.sync.get(key);
+    const tags = (stored[key] ?? []) as IdLessTag[];
+    return ok(new TagStore(tags).tags);
+  } catch (e) {
+    log.error("Cannot read local tags", e);
     return wrapErr({ reason: "storage", detail: String(e) });
   }
 }

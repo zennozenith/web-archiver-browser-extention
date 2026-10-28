@@ -6,7 +6,8 @@ import { TestEndpointResponse } from "@src/background/reqwest.ts";
 import { StorageExtensionSettings } from "./settings.ts";
 import { PageLookupFull } from "@src/background/page.ts";
 import { GetPendingFromStorage, RefreshPending } from "@src/background/pending.ts";
-import { IdLessTag, SetPageTag } from "@src/background/tags.ts";
+import { GetLocalPageTags, IdLessTag, SetPageTag } from "@src/background/tags.ts";
+import { ArchiveTab } from "@src/background/archive.ts";
 
 const log = rootLog.child("messaging");
 
@@ -26,20 +27,14 @@ export interface MessageMap {
   GET_PENDING: { payload: undefined; data: GetPendingFromStorage };
   REFRESH_PENDING: { payload: undefined; data: RefreshPending };
   SET_PAGE_TAGS: {
-    payload: { idOrUrl: string | Int64; tags: Vec<IdLessTag> };
+    payload: { idOrUrl: string | Int64; url: string; tags: Vec<IdLessTag> };
     data: SetPageTag;
   };
-  // GET_ARCHIVE: { payload: { tabId: Int }; data: ArchiveStatus };
+  GET_LOCAL_TAGS: { payload: { url: string }; data: GetLocalPageTags };
+  ARCHIVE_TAB: { payload: { tabId: Int; tags: Vec<IdLessTag> }; data: ArchiveTab };
   // SET_PENDING_TAGS: {
   //   payload: { id: Int64; tags: string[] };
   //   data: PendingDto;
-  // };
-  // ARCHIVE_TAB: {
-  //   payload: { tabId: Int; tags: Vec<IdLessTag> };
-  //   data: {
-  //     response: ApiArchiveResponse;
-  //     warnings: string[];
-  //   };
   // };
   // OPEN_AND_ARCHIVE: { payload: { url: Url; tags?: string[] }; data: void };
   // ARCHIVE_FROM_PAGE: {
