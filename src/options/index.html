@@ -41,29 +41,33 @@
 
       <fieldset>
         <legend>Capture</legend>
-        <label class="chk"><input data-key="include-screenshot" type="checkbox" checked /> Include
-          screenshot</label>
-        <label>
-          Screenshot format
-          <select data-key="screenshot-format">
-            <option value="png">PNG</option>
-            <option value="jpeg">JPEG (smaller)</option>
-          </select>
+        <label class="chk"><input data-key="save-assets" type="checkbox" checked /> Save Assets
+          <span class="hint">Related assets (js, css, etc.) downloaded by server</span>
         </label>
-        <label>JPEG quality (1–100) <input data-key="jpeg-quality" type="number" min="1" max="100" /></label>
-        <label class="chk"><input data-key="full-page-screenshot" type="checkbox" />
-          Full-page screenshot
-          <span class="hint">(Firefox only); Chrome captures the visible area)</span></label>
-        <label class="chk"><input data-key="include-request-headers" type="checkbox" /> Include request
-          headers</label>
-        <label class="chk"><input data-key="include-response-headers" type="checkbox" /> Include response
-          headers</label>
-        <label class="chk"><input data-key="include-sensitive-headers" type="checkbox" /> Include sensitive
-          headers unredacted <span class="hint">(Cookie, Authorization, Set-Cookie)</span></label>
-        <label>Sensitive headers <input data-key="sensitive-headers" type="text" autocomplete="off" /></label>
+        <label>
+          <label class="chk"><input data-key="include-screenshot" type="checkbox" checked /> Include
+            screenshot</label>
+          <label>
+            Screenshot format
+            <select data-key="screenshot-format">
+              <option value="png">PNG</option>
+              <option value="jpeg">JPEG (smaller)</option>
+            </select>
+          </label>
+          <label>JPEG quality (1–100) <input data-key="jpeg-quality" type="number" min="1" max="100" /></label>
+          <label class="chk"><input data-key="full-page-screenshot" type="checkbox" />
+            Full-page screenshot
+            <span class="hint">(Firefox only); Chrome captures the visible area)</span></label>
+          <label class="chk"><input data-key="include-request-headers" type="checkbox" /> Include request
+            headers</label>
+          <label class="chk"><input data-key="include-response-headers" type="checkbox" /> Include response
+            headers</label>
+          <label class="chk"><input data-key="include-sensitive-headers" type="checkbox" /> Include sensitive
+            headers unredacted <span class="hint">(Cookie, Authorization, Set-Cookie)</span></label>
+          <label>Sensitive headers <input data-key="sensitive-headers" type="text" autocomplete="off" /></label>
 
-        <label>Upload timeout (seconds)
-          <input data-key="request-timeout-sec" type="number" min="10" max="1800" /></label>
+          <label>Upload timeout (seconds)
+            <input data-key="request-timeout-sec" type="number" min="10" max="1800" /></label>
       </fieldset>
 
       <fieldset>

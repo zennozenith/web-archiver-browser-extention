@@ -15,6 +15,7 @@ export interface ExtensionSettings {
   directArchiveDelaySec: Int;
   directArchiveMode: "prompt" | "auto";
   fullPageScreenshot: boolean; // Firefox only
+  saveAssets: boolean;
   includeRequestHeaders: boolean;
   includeResponseHeaders: boolean;
   includeScreenshot: boolean;
@@ -41,6 +42,7 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   autoCheck: true,
   directArchiveDelaySec: 2,
   directArchiveMode: "prompt", // prompt | auto
+  saveAssets: true,
   fullPageScreenshot: false, // Firefox only
   includeRequestHeaders: true,
   includeResponseHeaders: true,

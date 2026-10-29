@@ -29,6 +29,7 @@ const inputAuthToken = elFromDataKey<HTMLInputElement>("auth-token");
 const inputIncludeScreenshot = elFromDataKey<HTMLInputElement>("include-screenshot");
 const selectScreenshotFormat = elFromDataKey<HTMLSelectElement>("screenshot-format");
 const inputJpegQuality = elFromDataKey<HTMLInputElement>("jpeg-quality");
+const saveAssets = elFromDataKey<HTMLInputElement>("save-assets");
 const inputFullPageScreenshot = elFromDataKey<HTMLInputElement>("full-page-screenshot");
 const inputIncludeRequestHeaders = elFromDataKey<HTMLInputElement>("include-request-headers");
 const inputIncludeResponseHeaders = elFromDataKey<HTMLInputElement>("include-response-headers");
@@ -108,6 +109,7 @@ function readForm() {
     includeScreenshot: inputIncludeScreenshot.checked,
     screenshotFormat: selectScreenshotFormat.value as ExtensionSettings["screenshotFormat"],
     jpegQuality: Number(inputJpegQuality.value),
+    saveAssets: saveAssets.checked,
     fullPageScreenshot: inputFullPageScreenshot.checked,
     includeRequestHeaders: inputIncludeRequestHeaders.checked,
     includeResponseHeaders: inputIncludeResponseHeaders.checked,
@@ -135,6 +137,7 @@ function fillForm(extensionSettings: ExtensionSettings): void {
   inputIncludeScreenshot.checked = extensionSettings.includeScreenshot;
   selectScreenshotFormat.value = extensionSettings.screenshotFormat;
   inputJpegQuality.value = String(extensionSettings.jpegQuality);
+  saveAssets.checked = extensionSettings.saveAssets;
   inputFullPageScreenshot.checked = extensionSettings.fullPageScreenshot;
   inputIncludeRequestHeaders.checked = extensionSettings.includeRequestHeaders;
   inputIncludeResponseHeaders.checked = extensionSettings.includeResponseHeaders;

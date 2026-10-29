@@ -122,6 +122,7 @@ async function archiveTab(tabId: Int, { tags }: { tags?: Vec<IdLessTag> } = {}) 
     jpegQuality,
     includeResponseHeaders,
     requestTimeoutSec,
+    saveAssets,
   } = await getExtensionSettings();
   const [_, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
   if (serverUnconfigured !== null) return wrapErr(serverUnconfigured);
@@ -260,6 +261,7 @@ async function archiveTab(tabId: Int, { tags }: { tags?: Vec<IdLessTag> } = {}) 
     formData.append("html", htmlBlob);
     formData.append("url", canonicalizeUrl(url));
     formData.append("title", title);
+    formData.append("save-assets", saveAssets ? "true" : "false");
 
     if (tags?.length) {
       formData.append("tags", JSON.stringify(tags.map((v) => v.name)));
