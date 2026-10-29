@@ -167,8 +167,12 @@ class CurrentPage {
     this.recheck.addEventListener("click", () => location.reload());
 
     this.archiveBtn.addEventListener("click", async () => {
+      let flashText = "Archiving...";
+
+      this.flash.textContent = flashText;
       this.archiveBtn.disabled = true;
       show(this.errorContainer, false);
+      show(this.flash, true);
 
       // Read at click time so tags edited just before archiving are included.
       const [archive, error] = await sendToBackground("ARCHIVE_TAB", {
@@ -185,19 +189,14 @@ class CurrentPage {
       }
 
       const { warnings } = archive;
-      const flashText =
+      flashText =
         "Archived ✓" +
         (warnings.length
           ? ` (${warnings.length} warning${warnings.length > 1 ? "s" : ""}: ${warnings.join("; ")})`
           : "");
 
       // Flash Message
-      if (flashText) {
-        show(this.flash, true);
-        this.flash.textContent = flashText;
-      } else {
-        show(this.flash, false);
-      }
+      this.flash.textContent = flashText;
 
       location.reload(); // re-lookup to show the new version
     });
