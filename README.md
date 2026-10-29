@@ -8,10 +8,11 @@ Built with TypeScript, Vite+ (`vp`), and [`@crxjs/vite-plugin`](https://crxjs.de
 
 - **Archive pages** — captures HTML, a screenshot, HTTP headers, and metadata, then sends it to your own server.
   - Toolbar button, keyboard shortcut (`Alt+Shift+A`), or right from the page.
-- **Archive status-check** — checks whether the current page is already archived and shows existing versions in the popup badge/pill. Optionally runs automatically on page load (`autoCheck`).
+- **Archive status-check** — checks whether the current page is already archived and shows existing versions in the popup badge/pill. Each version links straight to its archived HTML. Optionally runs automatically on page load (`autoCheck`).
 - **Tags** — add site-wide tags from the popup; tags are shared across all versions of a URL and merged server-side.
-- **Pending queue** — a periodic (configurable alarm-based) background refresh keeps a list of pending archives, and items can be re-tagged from the popup.
+- **Pending queue** — a periodic (configurable alarm-based) background refresh keeps a list of pending archives, and items can be re-tagged from the popup before archiving.
 - **Open and archive** — archive a URL without visiting it first.
+- **Connection test** — the options page checks `/api/health`, `/api/stats`, `/api/pending`, and `/api/pages/lookup` against the configured server.
 - **Badge feedback** — a small toast/notification with success/error feedback on archiving.
 - **Native-feeling integration** — respects the browser API differences between Chrome (Blink / service worker) and Firefox (Gecko / background scripts, `captureTab`).
 
@@ -60,17 +61,19 @@ NODE_ENV=production ./build.sh
 
 ### Endpoints
 
-The extension is configured with a server URL and separate endpoints for:
+The extension only needs your server's base URL; every API path is derived from it:
 
-| Endpoint    | Purpose                                        |
-| ----------- | ---------------------------------------------- |
-| `archive`   | Submit a new page archive                      |
-| `check`     | Query archive status for a URL                 |
-| `pending`   | List/manage pending archives                   |
-| `tags`      | List known tags                                |
-| `sitesTags` | Set tags for a site                            |
+| Path                  | Purpose                                    |
+| --------------------- | ------------------------------------------ |
+| `/api/archive`        | Submit a new page archive                  |
+| `/api/pages/lookup`   | Check whether a URL is already archived    |
+| `/api/pages/:id/tags` | Read/replace the tag set for a site        |
+| `/api/pending`        | List/manage the server-side pending queue  |
+| `/api/tags`           | List known tags for autocomplete           |
+| `/api/health`         | Connection test (liveness + queue counts)  |
+| `/api/stats`          | Connection test (archive/dedup statistics) |
 
-Endpoint configuration and a connection test ("Test endpoints") live in the options page.
+Endpoint configuration and a connection test ("Test connection") live in the options page.
 
 ## Architecture
 
@@ -103,15 +106,15 @@ Path aliases in `vite.config.ts`: `@src` → `src/`, `@common` → `src/common/`
 
 ## Scripts
 
-| Command                 | Description                                        |
-| ----------------------- | -------------------------------------------------- |
-| `bun run dev` / `dev:chrome` | Dev server (HMR), Chrome target               |
-| `bun run dev:firefox`   | Dev server (HMR), Firefox target                   |
-| `bun run build`         | Type-check + build + zip Chrome and Firefox        |
-| `bun run build:chrome` / `build:firefox` | Build a single target             |
-| `bun run typecheck`     | `tsc --noEmit`                                     |
-| `bun run lint:firefox`  | AMO linting of the Firefox build (`web-ext lint`)  |
-| `bun run start:firefox` | Launch Firefox with the built extension (`web-ext run`) |
+| Command                                  | Description                                             |
+| ---------------------------------------- | ------------------------------------------------------- |
+| `bun run dev` / `dev:chrome`             | Dev server (HMR), Chrome target                         |
+| `bun run dev:firefox`                    | Dev server (HMR), Firefox target                        |
+| `bun run build`                          | Type-check + build + zip Chrome and Firefox             |
+| `bun run build:chrome` / `build:firefox` | Build a single target                                   |
+| `bun run typecheck`                      | `tsc --noEmit`                                          |
+| `bun run lint:firefox`                   | AMO linting of the Firefox build (`web-ext lint`)       |
+| `bun run start:firefox`                  | Launch Firefox with the built extension (`web-ext run`) |
 
 Lint/format/typecheck in one shot: `vp check`.
 

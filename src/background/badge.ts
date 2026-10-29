@@ -6,7 +6,6 @@ import { PageLookupFull } from "./page";
 
 const log = bgRootlog.child("badge");
 
-// TODO: make more generic, take detail, error type as parameter
 export function applyStatusBadge(tabId: Int, lookupPageResult?: PageLookupFull): Promise<void> {
   if (!lookupPageResult) {
     return updateBadge({
@@ -22,15 +21,7 @@ export function applyStatusBadge(tabId: Int, lookupPageResult?: PageLookupFull):
       tabId,
       text: "!",
       color: "#d93025",
-      title: error.reason,
-    });
-  }
-
-  if (page === null) {
-    return updateBadge({
-      tabId,
-      text: "",
-      title: "Web Archiver — not archived yet",
+      title: `Archive status unavailable: ${error.detail}`,
     });
   }
 

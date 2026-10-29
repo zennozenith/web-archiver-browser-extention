@@ -1,7 +1,6 @@
-import { Fail } from "@common/error";
-import { ArchiveTab } from "../archive";
-import { IdLessTag } from "../tags";
-import type { UrlStr, Option, Vec } from "@common/types";
+import type { SendToBackground } from "@common/messaging";
+import type { IdLessTag } from "../tags";
+import type { Option, Vec } from "@common/types";
 
 export interface BannerOpts {
   kind: "ok" | "err" | (string & {});
@@ -22,7 +21,7 @@ export interface Page {
   lastModified: string; // eg: "09/04/2026 17:47:04"
   canonical: Option<string>;
 
-  favicon: Option<UrlStr>;
+  favicon: Option<string>;
   meta: Record<string, Option<string>>;
   viewport: {
     width: number; //      eg: 1080
@@ -92,20 +91,22 @@ export function pageBanner(opts: BannerOpts) {
   const box = document.createElement("div");
   root.append(style, box);
 
-  let timer: NodeJS.Timeout;
+  let timer: ReturnType<typeof setTimeout> | undefined;
 
   const close = () => {
-    clearTimeout(timer);
+    if (timer !== undefined) clearTimeout(timer);
     host.remove();
   };
 
-  function render(kind: string, text: string, buttons: any) {
+  type BannerButton = [label: string, onClick: () => void, primary?: boolean];
+
+  function render(kind: string, text: string, buttons: BannerButton[]) {
     box.className = "b " + (kind || "");
     box.replaceChildren();
     const t = document.createElement("div");
     t.textContent = text;
     box.append(t);
-    if (buttons && buttons.length) {
+    if (buttons.length) {
       const row = document.createElement("div");
       row.className = "r";
       for (const [label, fn, primary] of buttons) {
@@ -125,13 +126,11 @@ export function pageBanner(opts: BannerOpts) {
   const archive = async () => {
     render("", "Archiving…", []);
 
-    // TODO:
-    // const result: Result<unknown> = await api.runtime.sendMessage({
     const [data, error] = (await api.runtime.sendMessage({
       type: "ARCHIVE_FROM_PAGE",
       // explicitly selected tags; pending-queue tags merge in the background
       payload: { tags: [...chosen] },
-    })) as ArchiveTab | Fail<{ reason: "no_tab_id"; detail: string }>;
+    })) as SendToBackground<"ARCHIVE_FROM_PAGE">;
 
     if (data !== null) {
       const count = data.response.version;

@@ -1,13 +1,18 @@
 import browser from "webextension-polyfill";
-import { Int, Int64, UrlStr, Vec } from "./types.ts";
+import type { Int, Int64, Vec } from "./types.ts";
 import { log as rootLog } from "./log.ts";
-import { Err, err, Fail, Ok } from "./error.ts";
-import { TestEndpointResponse } from "@src/background/reqwest.ts";
-import { StorageExtensionSettings } from "./settings.ts";
-import { PageLookupFull } from "@src/background/page.ts";
-import { GetPendingFromStorage, RefreshPending } from "@src/background/pending.ts";
-import { GetLocalPageTags, IdLessTag, ListTags, SetPageTag } from "@src/background/tags.ts";
-import { ArchiveTab } from "@src/background/archive.ts";
+import type { Err, Fail, Ok, Result } from "./error.ts";
+import { err } from "./error.ts";
+import type { TestEndpointResponse } from "@src/background/reqwest.ts";
+import type { StorageExtensionSettings } from "./settings.ts";
+import type { PageLookupFull } from "@src/background/page.ts";
+import type {
+  GetPendingFromStorage,
+  RefreshPending,
+  SetPendingTags,
+} from "@src/background/pending.ts";
+import type { GetLocalPageTags, IdLessTag, ListTags, SetPageTag } from "@src/background/tags.ts";
+import type { ArchiveTab } from "@src/background/archive.ts";
 
 const log = rootLog.child("messaging");
 
@@ -20,12 +25,13 @@ export type Empty = Record<string, never>;
 export interface MessageMap {
   GET_EXTENSION_SETTINGS: { payload: undefined; data: Ok<StorageExtensionSettings> };
   TEST_ENDPOINTS: {
-    payload: { serverUrl: UrlStr; token?: string };
+    payload: { serverUrl: string; token?: string };
     data: Ok<TestEndpointResponse[]>;
   };
   PAGE_LOOKUP_FULL: { payload: { tabId: Int }; data: PageLookupFull };
   GET_PENDING: { payload: undefined; data: GetPendingFromStorage };
   REFRESH_PENDING: { payload: undefined; data: RefreshPending };
+  SET_PENDING_TAGS: { payload: { id: Int64; tags: Vec<IdLessTag> }; data: SetPendingTags };
   SET_PAGE_TAGS: {
     payload: { idOrUrl: string | Int64; url: string; tags: Vec<IdLessTag> };
     data: SetPageTag;
@@ -33,15 +39,11 @@ export interface MessageMap {
   GET_LOCAL_TAGS: { payload: { url: string }; data: GetLocalPageTags };
   ARCHIVE_TAB: { payload: { tabId: Int; tags: Vec<IdLessTag> }; data: ArchiveTab };
   LIST_TAGS: { payload: undefined; data: ListTags };
-  OPEN_AND_ARCHIVE: { payload: { url: string; tags?: string[] }; data: Ok<boolean> };
+  OPEN_AND_ARCHIVE: { payload: { url: string; tags?: string[] }; data: Result<boolean> };
   ARCHIVE_FROM_PAGE: {
     payload: { tags: Vec<IdLessTag> };
     data: ArchiveTab | Fail<{ reason: "no_tab_id"; detail: string }>;
   };
-  // SET_PENDING_TAGS: {
-  //   payload: { id: Int64; tags: string[] };
-  //   data: PendingDto;
-  // };
 }
 
 export type MessageType = keyof MessageMap;

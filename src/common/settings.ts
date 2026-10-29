@@ -1,8 +1,7 @@
-import type { Int, UrlStr, Vec } from "./types";
+import type { IdLessTag, Int, Vec } from "./types";
 import type { LevelSetting, Logger } from "./logger";
 import { local_storage_get, local_storage_set } from "./storage";
 import { log as rootLog } from "./log.ts";
-import { IdLessTag } from "@src/background/tags.ts";
 import { ok, err } from "./error.ts";
 
 const log = rootLog.child("settings");
@@ -31,8 +30,18 @@ export interface ExtensionSettings {
   defaultTags: Vec<IdLessTag>;
 }
 
-export interface StorageExtensionSettings extends Omit<ExtensionSettings, "serverUrl"> {
-  serverUrl: UrlStr;
+/**
+ * The JSON-safe shape written to `storage.local`.
+ *
+ * `URL` and `Set` are not reliably serialized by the WebExtensions storage API,
+ * so they are stored as a string and an array respectively.
+ */
+export interface StorageExtensionSettings extends Omit<
+  ExtensionSettings,
+  "serverUrl" | "sensitiveHeaders"
+> {
+  serverUrl: string;
+  sensitiveHeaders: string[];
 }
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
@@ -62,27 +71,47 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
 export const EXTENSION_SETTINGS_SESSION_KEY = "extension_settings" as const;
 
 /**
- * Retrieve user settings from browser.storage.sync or in memory map
+ * Retrieve user settings from browser.storage.local, hydrating the non-JSON
+ * values (`URL`, `Set`) and filling in anything missing with defaults.
  */
 export async function getExtensionSettings(): Promise<ExtensionSettings> {
   const stored =
-    ((await local_storage_get(EXTENSION_SETTINGS_SESSION_KEY)) as Partial<ExtensionSettings>) ?? {};
-  return { ...DEFAULT_SETTINGS, ...stored };
+    ((await local_storage_get(EXTENSION_SETTINGS_SESSION_KEY)) as
+      | Partial<StorageExtensionSettings>
+      | undefined) ?? {};
+
+  const { serverUrl, sensitiveHeaders, ...rest } = stored;
+  const parsedServerUrl =
+    typeof serverUrl === "string" ? (URL.parse(serverUrl) ?? DEFAULT_SETTINGS.serverUrl) : null;
+
+  return {
+    ...DEFAULT_SETTINGS,
+    ...rest,
+    serverUrl: parsedServerUrl ?? DEFAULT_SETTINGS.serverUrl,
+    // Older builds stored a Set, which serializes to `{}`; fall back to defaults.
+    sensitiveHeaders: new Set(
+      Array.isArray(sensitiveHeaders) ? sensitiveHeaders : DEFAULT_SETTINGS.sensitiveHeaders,
+    ),
+    defaultTags: Array.isArray(rest.defaultTags)
+      ? rest.defaultTags
+      : [...DEFAULT_SETTINGS.defaultTags],
+  };
 }
 
 export function storageSettingsFromSetting(
   extensionSettings: ExtensionSettings,
 ): StorageExtensionSettings {
-  const { serverUrl, ...rest } = extensionSettings;
+  const { serverUrl, sensitiveHeaders, ...rest } = extensionSettings;
   return {
     ...rest,
     serverUrl: serverUrl.toString(),
+    sensitiveHeaders: [...sensitiveHeaders],
   };
 }
 
 export function settingsFromStorageSetting(storageSettings: StorageExtensionSettings) {
-  const { serverUrl, ...rest } = storageSettings;
-  let url = URL.parse(serverUrl);
+  const { serverUrl, sensitiveHeaders, ...rest } = storageSettings;
+  const url = URL.parse(serverUrl);
 
   if (!url)
     return err({
@@ -91,28 +120,31 @@ export function settingsFromStorageSetting(storageSettings: StorageExtensionSett
       detail: `server url cannot be converted to URL: ${serverUrl}`,
     });
   return ok<ExtensionSettings>({
+    ...DEFAULT_SETTINGS,
     ...rest,
     serverUrl: url,
+    sensitiveHeaders: new Set(
+      Array.isArray(sensitiveHeaders) ? sensitiveHeaders : DEFAULT_SETTINGS.sensitiveHeaders,
+    ),
   });
 }
 
 /**
- * Save user settings to browser.storage.sync
+ * Save user settings to browser.storage.local.
  */
 export async function saveSettings(
   settings: Partial<ExtensionSettings>,
 ): Promise<ExtensionSettings> {
-  const { serverUrl: currentServerUrl, ...current } = await getExtensionSettings();
+  const current = await getExtensionSettings();
   const { serverUrl: newServerUrl, ...newSetting } = settings;
-  const updated: StorageExtensionSettings = {
+  const updated: ExtensionSettings = {
     ...current,
     ...newSetting,
-    serverUrl: newServerUrl?.toString() ?? currentServerUrl.toString(),
+    serverUrl: newServerUrl ?? current.serverUrl,
   };
-  // Object.assign(RUNTIME_EXTENTION_SETTING, updated);
-  await local_storage_set(EXTENSION_SETTINGS_SESSION_KEY, updated);
+  await local_storage_set(EXTENSION_SETTINGS_SESSION_KEY, storageSettingsFromSetting(updated));
   log.info("Settings saved", Object.keys(settings));
-  return { ...updated, serverUrl: new URL(updated.serverUrl) };
+  return updated;
 }
 
 export function isServerConfigured({ serverUrl }: Pick<ExtensionSettings, "serverUrl">): boolean {

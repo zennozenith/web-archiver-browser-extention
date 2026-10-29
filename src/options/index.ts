@@ -10,12 +10,17 @@ import {
 } from "@common/settings";
 import { getElementById, setElementText } from "@common/document";
 import { sendToBackground } from "@common/messaging";
-import { Vec } from "@common/types";
+import type { IdLessTag } from "@common/types";
 import { err, ok } from "@common/error";
 const log = rootLog.child("options");
 
 function elFromDataKey<T extends HTMLElement>(key: string): T {
-  return document.querySelector(`[data-key=${key}`) as T;
+  return document.querySelector(`[data-key="${key}"]`) as T;
+}
+
+/** Format a tag for the comma-separated input: `name` or `name:color`. */
+function formatTag(tag: IdLessTag): string {
+  return tag.color ? `${tag.name}:${tag.color}` : tag.name;
 }
 
 // DOM Elements
@@ -67,7 +72,7 @@ async function loadSettings(): Promise<void> {
     fillForm(settings);
   } catch (err) {
     log.error("Failed to load settings", err);
-    toaster.error(`Failed to load settings: ${err}`);
+    toaster.error(`Failed to load settings: ${String(err)}`);
   }
 }
 
@@ -81,17 +86,16 @@ function readForm() {
       .map((v) => v.trim())
       .filter((v) => v.length > 0),
   );
-  const defaultTags = inputDefaultTags.value
+  const defaultTags: IdLessTag[] = inputDefaultTags.value
     .split(",")
-    .map((v) => v.trim())
-    .filter((v) => v.length > 0)
-    .map((v) => {
-      let s = v.split(":", 2);
-      return {
-        name: s[0],
-        color: s[1] ? s[1] : null,
-      };
-    });
+    .map((value) => {
+      const sep = value.indexOf(":");
+      const name = (sep === -1 ? value : value.slice(0, sep)).trim();
+      if (!name) return null;
+      const color = sep === -1 ? null : value.slice(sep + 1).trim() || null;
+      return { name, color };
+    })
+    .filter((tag): tag is IdLessTag => tag !== null);
 
   const serverUrl = URL.parse(inputServerUrl.value.trim());
 
@@ -142,8 +146,8 @@ function fillForm(extensionSettings: ExtensionSettings): void {
   inputIncludeRequestHeaders.checked = extensionSettings.includeRequestHeaders;
   inputIncludeResponseHeaders.checked = extensionSettings.includeResponseHeaders;
   inputIncludeSensitiveHeaders.checked = extensionSettings.includeSensitiveHeaders;
-  inputSensitiveHeaders.value = Vec.from(extensionSettings.sensitiveHeaders).join(", ");
-  inputDefaultTags.value = Vec.from(extensionSettings.defaultTags).join(", ");
+  inputSensitiveHeaders.value = [...extensionSettings.sensitiveHeaders].join(", ");
+  inputDefaultTags.value = extensionSettings.defaultTags.map(formatTag).join(", ");
   inputRequestTimeoutSec.value = String(extensionSettings.requestTimeoutSec);
   inputAutoCheck.checked = extensionSettings.autoCheck;
   inputPendingRefreshMinutes.value = String(extensionSettings.pendingRefreshMinutes);
@@ -154,7 +158,12 @@ function fillForm(extensionSettings: ExtensionSettings): void {
   inputShowBadge.checked = extensionSettings.showBadge;
   selectLogLevel.value = extensionSettings.logLevel;
 
+  syncSensitiveHeadersInput();
   applyTheme(extensionSettings.theme);
+}
+
+function syncSensitiveHeadersInput() {
+  inputSensitiveHeaders.disabled = inputIncludeSensitiveHeaders.checked;
 }
 
 // Save form submit
@@ -184,7 +193,7 @@ form.addEventListener("submit", async (e) => {
     toaster.success("Preferences saved successfully!");
   } catch (err) {
     log.error("Failed to save settings", err);
-    toaster.error(`Error saving settings: ${err}`);
+    toaster.error(`Error saving settings: ${String(err)}`);
   } finally {
     btnSave.disabled = false;
   }
@@ -204,25 +213,31 @@ btnTest.addEventListener("click", async () => {
   const out = getElementById("test-result", HTMLDivElement);
   const { serverUrl, token } = updatedSettings;
 
+  out.replaceChildren();
   setElementText(out, "Testing…");
-  // TODO: reutrn health, stats response
-  const [res, resError] = await sendToBackground("TEST_ENDPOINTS", {
-    serverUrl: serverUrl.toString(),
-    token,
-  });
-  setElementText(out, "");
+  btnTest.disabled = true;
 
-  if (resError) {
-    setElementText(out, resError.detail, "err");
-    return;
+  try {
+    const [res, resError] = await sendToBackground("TEST_ENDPOINTS", {
+      serverUrl: serverUrl.toString(),
+      token,
+    });
+    out.replaceChildren();
+
+    if (resError) {
+      setElementText(out, resError.detail, "err");
+      return;
+    }
+
+    res.forEach(({ ok, text }) => {
+      const div = document.createElement("div");
+      div.classList.add(ok ? "ok" : "err");
+      div.textContent = text;
+      out.appendChild(div);
+    });
+  } finally {
+    btnTest.disabled = false;
   }
-
-  res.forEach(({ ok, text }) => {
-    const div = document.createElement("div");
-    div.classList.add(ok ? "ok" : "err");
-    div.textContent = text;
-    out.appendChild(div);
-  });
 });
 
 // Reset to default settings
@@ -235,7 +250,7 @@ btnReset.addEventListener("click", async () => {
     toaster.success("Preferences reset to default values");
   } catch (err) {
     log.error("Failed to reset settings", err);
-    toaster.error(`Error resetting settings: ${err}`);
+    toaster.error(`Error resetting settings: ${String(err)}`);
   } finally {
     btnReset.disabled = false;
   }
@@ -246,9 +261,8 @@ selectTheme.addEventListener("change", () => {
   applyTheme(selectTheme.value as "auto" | "light" | "dark");
 });
 
-inputIncludeSensitiveHeaders.addEventListener("change", (e) => {
-  const disabled = (e.target as HTMLInputElement).checked === true;
-  inputSensitiveHeaders.disabled = disabled;
+inputIncludeSensitiveHeaders.addEventListener("change", () => {
+  syncSensitiveHeadersInput();
 });
 
 // Initialize on page load
@@ -280,7 +294,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       help.textContent = "Open about:addons → gear icon → Manage Extension Shortcuts.";
     else {
       help.textContent = "Opening chrome://extensions/shortcuts …";
-      browser.tabs.create({ url: "chrome://extensions/shortcuts" });
+      void browser.tabs.create({ url: "chrome://extensions/shortcuts" });
     }
   };
 });

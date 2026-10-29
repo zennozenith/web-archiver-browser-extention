@@ -7,11 +7,12 @@ import {
   handleOpened,
   openAndArchive,
   patchHeaders,
+  testPageStatus,
 } from "./archive";
-import { getPendingFromStorage, refreshPending } from "./pending";
+import { getPendingFromStorage, refreshPending, testPending, updatePendingTags } from "./pending";
 import { bgRootlog as log, receiveForwardedLogsInBackground } from "@common/log";
 import { session_storage_delete, session_storage_get } from "@common/storage";
-import { canonicalizeUrl, extractTabUrl, isArchivable, sha256 } from "@common/index";
+import { canonicalizeUrl, isArchivable } from "@common/index";
 import { Message, MessageData, MessagePayload, MessageType } from "@common/messaging";
 import {
   errorIfServerUnconfigured,
@@ -21,6 +22,7 @@ import {
   storageSettingsFromSetting,
 } from "@common/settings";
 import { applyStatusBadge } from "./badge";
+import { testHealth, testStats } from "./api";
 import { TestEndpointResponse } from "./reqwest";
 import { pageLookupFull, statusCacheKey } from "./page";
 import { getLocalPageTags, setLocalPageTag, setRemotePageTag, listTags } from "./tags";
@@ -52,7 +54,7 @@ async function ensureAlarm(force: boolean = false) {
   }
   const alarm = await browser.alarms.get(ALARM);
   if (force || !alarm || alarm.periodInMinutes !== mins)
-    browser.alarms.create(ALARM, { periodInMinutes: mins, delayInMinutes: mins });
+    void browser.alarms.create(ALARM, { periodInMinutes: mins, delayInMinutes: mins });
 }
 
 /* ================= events ================= */
@@ -62,14 +64,14 @@ browser.tabs.onUpdated.addListener(async (tabId, change, tab) => {
   if (!loaded || tab.url === undefined || !isArchivable(tab.url)) return;
   logWebReq.debug("Page load complete", { tabId, url: tab.url });
   if (change.status === "complete" && (await session_storage_get(`open:${tabId}`))) {
-    handleOpened(tabId);
+    void handleOpened(tabId);
   }
 
   const { serverUrl, autoCheck } = await getExtensionSettings();
   const [_, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
   if (serverUnconfigured !== null) return wrapErr(serverUnconfigured);
 
-  if (autoCheck) pageLookupFull(tabId);
+  if (autoCheck) void pageLookupFull(tabId);
 });
 
 browser.tabs.onActivated.addListener(async ({ tabId }) => {
@@ -83,23 +85,18 @@ browser.tabs.onActivated.addListener(async ({ tabId }) => {
   if (serverUnconfigured !== null) return wrapErr(serverUnconfigured);
 
   if (autoCheck) {
-    pageLookupFull(tabId);
+    void pageLookupFull(tabId);
   }
 });
 
 browser.tabs.onRemoved.addListener(async (tabId) => {
-  const [_url, _] = await extractTabUrl(tabId, log);
-  let url = _url ? canonicalizeUrl(_url) : "";
-  const urlShaHash = await sha256(url);
+  const statusKey = (await session_storage_get(`statusKey:${tabId}`)) as string | undefined;
 
   logWebReq.debug("Tab removed", { tabId });
   deleteHeaderMemory(tabId);
-  session_storage_delete(
-    `hdr:${tabId}`,
-    `status:${urlShaHash}`,
-    `archiveError:${tabId}`,
-    `open:${tabId}`,
-  ).catch(() => {});
+  const keys = [`hdr:${tabId}`, `statusKey:${tabId}`, `archiveError:${tabId}`, `open:${tabId}`];
+  if (statusKey) keys.push(statusKey);
+  session_storage_delete(...keys).catch(() => {});
 });
 
 browser.commands.onCommand.addListener(async (cmd) => {
@@ -107,31 +104,31 @@ browser.commands.onCommand.addListener(async (cmd) => {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
   if (tab) {
     log.info("Keyboard shortcut received", { command: cmd, tabId: tab.id });
-    archiveWithFeedback(tab.id as number, { toast: true });
+    void archiveWithFeedback(tab.id as number, { toast: true });
   }
 });
 
 browser.alarms.onAlarm.addListener((a) => {
   if (a.name === ALARM) {
-    refreshPending();
+    void refreshPending();
   }
 });
 
 browser.runtime.onInstalled.addListener(async (d) => {
   log.info("Extension installed/updated", d.reason);
   await ensureAlarm(true);
-  refreshPending();
+  void refreshPending();
   const extensionSettings = await getExtensionSettings();
   if (d.reason === "install" && isServerConfigured(extensionSettings)) {
     log.info("First install, opening options page to configure the server");
-    browser.runtime.openOptionsPage();
+    void browser.runtime.openOptionsPage();
   }
 });
 
 browser.runtime.onStartup.addListener(() => {
   log.debug("Browser startup");
-  ensureAlarm();
-  refreshPending();
+  void ensureAlarm();
+  void refreshPending();
 });
 
 browser.storage.onChanged.addListener(async (changes, namespace) => {
@@ -189,7 +186,7 @@ browser.webRequest.onHeadersReceived.addListener(
   ENGINE === "gecko" ? ["responseHeaders"] : ["responseHeaders", "extraHeaders"],
 );
 
-ensureAlarm();
+void ensureAlarm();
 
 type Handlers = {
   [K in MessageType]: (
@@ -236,18 +233,23 @@ registerHandlers({
   GET_EXTENSION_SETTINGS: async () => {
     return ok(storageSettingsFromSetting(await getExtensionSettings()));
   },
-  // TODO: better tests
-  TEST_ENDPOINTS: async ({ serverUrl: _t, token: _a }) => {
-    const result: TestEndpointResponse[] = await Promise.all([
-      // TODO:
-      // testPending(endpoints.pending, token),
-      // testPageStatus(endpoints.check, { token, queryUrl: "https://example.com/" }),
+  TEST_ENDPOINTS: async ({ serverUrl, token }) => {
+    const baseUrl = URL.parse(serverUrl);
+    if (!baseUrl) {
+      return ok<TestEndpointResponse[]>([{ ok: false, text: `Invalid server URL: ${serverUrl}` }]);
+    }
+
+    const result = await Promise.all([
+      testHealth(baseUrl, token),
+      testStats(baseUrl, token),
+      testPending(baseUrl, token),
+      testPageStatus(baseUrl, { token, queryUrl: "https://example.com/" }),
     ]);
     return ok(result);
   },
   PAGE_LOOKUP_FULL: async ({ tabId }) => {
     const lookupFullResult = await pageLookupFull(tabId);
-    applyStatusBadge(tabId, lookupFullResult);
+    void applyStatusBadge(tabId, lookupFullResult);
     return lookupFullResult;
   },
 
@@ -286,14 +288,22 @@ registerHandlers({
     return await archiveWithFeedback(tabId, { toast: false, tags });
   },
 
-  // // TODO: rename update pending
-  // SET_PENDING_TAGS: async ({ id, tags }) => {
-  //   return await updatePendingTags(id, { tags });
-  // },
+  SET_PENDING_TAGS: async ({ id, tags }) => {
+    return await updatePendingTags(id, tags);
+  },
 
   OPEN_AND_ARCHIVE: async ({ url, tags }) => {
-    await openAndArchive(url, tags ?? []);
-    return ok(true);
+    try {
+      await openAndArchive(url, tags ?? []);
+      return ok(true);
+    } catch (e) {
+      return err({
+        logger: log,
+        reason: "open_and_archive_failed",
+        detail: "Cannot open a tab for the pending item",
+        extra: e,
+      });
+    }
   },
   ARCHIVE_FROM_PAGE: async ({ tags }, sender) => {
     if (sender.tab?.id === undefined) {

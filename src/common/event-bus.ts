@@ -117,7 +117,7 @@ export class EventBus<E extends EventMap> {
   off(pattern: Key<E> | Pattern<E>, fn?: Listener<any, any>): void {
     const set = this.listeners.get(pattern);
     if (!set) return;
-    for (const entry of [...set]) {
+    for (const entry of set) {
       if (!fn || entry.fn === fn) this.remove(entry);
     }
   }

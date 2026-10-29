@@ -4,11 +4,11 @@ import browser from "webextension-polyfill";
 import { err, ok, isStandardError, wrapErr } from "@common/error";
 import { bgRootlog } from "@common/log";
 import { reqwest, TestEndpointResponse } from "./reqwest";
-import { Int, Int64, UrlStr, Option, Vec } from "@common/types";
+import { Int, Int64, Option, Vec } from "@common/types";
 import { session_storage_delete, session_storage_get, session_storage_set } from "@common/storage";
 import { errorIfServerUnconfigured, getExtensionSettings } from "@common/settings";
 import { canonicalizeUrl, createUrl, extractTabUrl, sha256 } from "@common/index";
-import type { TagDto, IdLessTag } from "./tags";
+import type { IdLessTag } from "./tags";
 import { Screenshot, takeScreenshot } from "./screenshot";
 import { injectBanner } from "./browser-scripting";
 import { updateBadge } from "./badge";
@@ -33,12 +33,13 @@ export interface HeadersDetails {
 
 export interface Dedup {
   html: boolean;
+  originalHtml: boolean;
   screenshot: Option<boolean>;
 }
 
 export interface ApiArchiveResponse {
-  captureId: Int64;
-  pageId: Int64;
+  capture_id: Int64;
+  page_id: Int64;
   version: Int64;
   deduplicated: Dedup;
 }
@@ -48,23 +49,10 @@ const busyTabs = new Set<Int>();
 const sleep = (ms: Int) => new Promise((resolve) => setTimeout(resolve, ms));
 const headerMemory = new Map<Int, Partial<HeadersDetails>>();
 
-// TODO: todo are merge function required
-export function mergeTags(...lists: Vec<TagDto>[]): Vec<TagDto> {
-  const byId = new Map<Int64, TagDto>();
-  for (const list of lists) {
-    for (const tag of list) {
-      if (!byId.has(tag.id)) byId.set(tag.id, tag);
-    }
-  }
-  return [...byId.values()];
-}
 export function mergeTagNames(...lists: Vec<IdLessTag>[]): IdLessTag[] {
   const byName = new Map<string, IdLessTag>();
   for (const list of lists) for (const tag of list) byName.set(tag.name, tag);
   return [...byName.values()];
-}
-export function mergeTagNamesNames(...lists: Vec<IdLessTag>[]): string[] {
-  return [...new Set(lists.flat().map((t) => t.name))];
 }
 
 export function deleteHeaderMemory(tabId: Int) {
@@ -121,6 +109,7 @@ async function archiveTab(tabId: Int, { tags }: { tags?: Vec<IdLessTag> } = {}) 
     fullPageScreenshot,
     jpegQuality,
     includeResponseHeaders,
+    includeRequestHeaders,
     requestTimeoutSec,
     saveAssets,
   } = await getExtensionSettings();
@@ -164,7 +153,7 @@ async function archiveTab(tabId: Int, { tags }: { tags?: Vec<IdLessTag> } = {}) 
       return err({
         logger: log,
         reason: "execute_script_collect_page",
-        detail: `Could not read the page (${errorMessage}). If this is Firefox, make sure site access is granted in the preferences.`,
+        detail: `Could not read the page (${String(errorMessage)}). If this is Firefox, make sure site access is granted in the preferences.`,
       });
     }
     doneCollect(`fetch ${results?.[0]?.result ? "ok" : "empty"}`);
@@ -204,7 +193,7 @@ async function archiveTab(tabId: Int, { tags }: { tags?: Vec<IdLessTag> } = {}) 
       warnings.push(
         "No request headers recorded for this tab (page was loaded before the extension started)",
       );
-    } else if (canonicalizeUrl(headers.url as UrlStr) !== canonicalizeUrl(page.url)) {
+    } else if (headers.url && canonicalizeUrl(headers.url) !== canonicalizeUrl(page.url)) {
       log.warn(
         "Recorded headers belong to a different URL (page navigated via script/history browser)",
       );
@@ -221,13 +210,14 @@ async function archiveTab(tabId: Int, { tags }: { tags?: Vec<IdLessTag> } = {}) 
       title,
       capturedAt: new Date().toISOString(),
       page: { ...pageInfo, scroll: { width: scrollWidth, height: scrollHeight } },
-      request: headers
-        ? {
-            method: headers.method || "GET",
-            url: headers.url,
-            headers: await headersToObject(headers.requestHeaders, includeSensitiveHeaders),
-          }
-        : null,
+      request:
+        headers && includeRequestHeaders
+          ? {
+              method: headers.method || "GET",
+              url: headers.url,
+              headers: await headersToObject(headers.requestHeaders, includeSensitiveHeaders),
+            }
+          : null,
       response:
         headers && includeResponseHeaders
           ? {
@@ -314,6 +304,30 @@ async function archiveTab(tabId: Int, { tags }: { tags?: Vec<IdLessTag> } = {}) 
 
 export type ArchiveTab = Awaited<ReturnType<typeof archiveWithFeedback>>;
 
+async function reportArchiveFailure(
+  tabId: Int,
+  errorMessage: string,
+  { toast }: { toast: boolean },
+) {
+  await session_storage_set(`archiveError:${tabId}`, {
+    message: errorMessage,
+    time: Date.now(),
+  });
+  await updateBadge({
+    tabId,
+    text: "!",
+    color: "#d93025",
+    title: `Archive failed: ${errorMessage}`,
+  });
+
+  if (toast)
+    await injectBanner(tabId, {
+      mode: "toast",
+      kind: "err",
+      text: `Archive failed: ${errorMessage}`,
+    });
+}
+
 export async function archiveWithFeedback(
   tabId: Int,
   { toast, tags }: { toast: boolean; tags?: Vec<IdLessTag> },
@@ -321,40 +335,22 @@ export async function archiveWithFeedback(
   try {
     const [res, error] = await archiveTab(tabId, { tags });
     if (error !== null) {
+      await reportArchiveFailure(tabId, error.detail, { toast });
       return wrapErr(error);
     }
 
     if (toast) {
       const n = res.response.version;
-      log.error(`Archived ✓${n ? ` (${n} version${n === 1 ? "" : "s"})` : ""}`);
-      injectBanner(tabId, {
-        mode: "toast",
-        kind: "ok",
-        text: `Archived ✓${n ? ` (${n} version${n === 1 ? "" : "s"})` : ""}`,
-      });
+      const text = `Archived ✓${n ? ` (${n} version${n === 1 ? "" : "s"})` : ""}`;
+      log.info(text);
+      await injectBanner(tabId, { mode: "toast", kind: "ok", text });
     }
     return ok(res);
   } catch (e) {
     const errorMessage = isStandardError(e) ? e.message : String(e);
     log.error("Archive failed", errorMessage, e);
 
-    await session_storage_set(`archiveError:${tabId}`, {
-      message: errorMessage,
-      time: Date.now(),
-    });
-    updateBadge({
-      tabId,
-      text: "!",
-      color: "#d93025",
-      title: `Archive failed: ${errorMessage}`,
-    });
-
-    if (toast)
-      injectBanner(tabId, {
-        mode: "toast",
-        kind: "err",
-        text: `Archive failed: ${errorMessage}`,
-      });
+    await reportArchiveFailure(tabId, errorMessage, { toast });
 
     return err({
       reason: "archive_failed",
@@ -365,18 +361,20 @@ export async function archiveWithFeedback(
   }
 }
 
-export async function openAndArchive(url: UrlStr, tags: string[] = []) {
+export async function openAndArchive(url: string, tags: string[] = []) {
   const tab = await browser.tabs.create({ url, active: true });
   logCapture.info("Opened new tab for direct archive", { url, tabId: tab.id });
-  await session_storage_set(`open:${tab.id}`, { url, at: Date.now(), tags });
+  // Pending items only carry tag names; store the same shape as archive tags.
+  const tagObjects: Vec<IdLessTag> = tags.map((name) => ({ name, color: null }));
+  await session_storage_set(`open:${tab.id}`, { url, at: Date.now(), tags: tagObjects });
 }
 
 export async function handleOpened(tabId: Int) {
   const opened = (await session_storage_get(`open:${tabId}`)) as {
-    url: UrlStr;
+    url: string;
     at: number;
     tags?: Vec<IdLessTag>;
-  };
+  } | null;
   await session_storage_delete(`open:${tabId}`);
 
   const { serverUrl, directArchiveMode, directArchiveDelaySec, defaultTags, token } =
@@ -390,7 +388,7 @@ export async function handleOpened(tabId: Int) {
 
   if (directArchiveMode === "auto") {
     // Per-URL pending tags are merged inside archiveTab automatically.
-    archiveWithFeedback(tabId, { toast: true, tags: opened?.tags ?? undefined });
+    void archiveWithFeedback(tabId, { toast: true, tags: opened?.tags ?? undefined });
   } else {
     // Prompt mode: offer a tag chip row (site's current/default tags, preselected)
     // before confirming; chosen tags are sent with ARCHIVE_FROM_PAGE.
@@ -402,7 +400,7 @@ export async function handleOpened(tabId: Int) {
 
     const [page, error] = await pageLookup(url, { serverUrl, token });
     const siteTags = error === null && page ? page.tags : [];
-    injectBanner(tabId, {
+    await injectBanner(tabId, {
       kind: "",
       mode: "prompt",
       text: "Archive this page?",
@@ -412,24 +410,16 @@ export async function handleOpened(tabId: Int) {
 }
 
 export async function testPageStatus(
-  serverUrl: UrlStr,
+  serverUrl: URL,
   {
     token,
     queryUrl = "https://example.com/",
   }: {
     token?: string;
-    queryUrl?: UrlStr;
+    queryUrl?: string;
   } = {},
 ): Promise<TestEndpointResponse> {
-  const url = URL.parse(serverUrl);
-  if (!url) {
-    return {
-      ok: false,
-      text: `page check ✗ Cannot parse ${serverUrl} as URL`,
-    };
-  }
-
-  const reqUrl = createUrl(url, "/api/pages/lookup");
+  const reqUrl = createUrl(serverUrl, "/api/pages/lookup");
   reqUrl.searchParams.set("url", queryUrl);
   const [response, error] = await reqwest<ApiPageDetail>(reqUrl, {
     token,

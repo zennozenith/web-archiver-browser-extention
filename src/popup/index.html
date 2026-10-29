@@ -1,163 +1,212 @@
 <!doctype html>
 <html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Web Archiver</title>
+    <link rel="stylesheet" href="./popup.css" />
+    <script type="module" src="./index.ts"></script>
+  </head>
 
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Web Archiver</title>
-  <link rel="stylesheet" href="./popup.css" />
-  <script type="module" src="./index.ts"></script>
-</head>
+  <body>
+    <header class="extension-header">
+      <h1 class="extension-title">Web Archiver</h1>
 
-<body>
-  <header class="extension-header">
-    <h1 class="extension-title">Web Archiver</h1>
+      <div class="toolbar-actions">
+        <a
+          id="link-open-server"
+          class="icon-button hidden"
+          href="#"
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Open server dashboard"
+          aria-label="Open server dashboard"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect width="20" height="8" x="2" y="2" rx="2" />
+            <rect width="20" height="8" x="2" y="14" rx="2" />
+            <path d="M6 6h.01M6 18h.01" />
+          </svg>
+        </a>
 
-    <div class="toolbar-actions">
-      <a id="link-open-server" class="icon-button hidden" href="#" target="_blank" rel="noopener noreferrer"
-        title="Open server dashboard" aria-label="Open server dashboard">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <rect width="20" height="8" x="2" y="2" rx="2" />
-          <rect width="20" height="8" x="2" y="14" rx="2" />
-          <path d="M6 6h.01M6 18h.01" />
-        </svg>
-      </a>
-
-      <button data-key="btn-open-options" type="button" class="icon-button" title="Preferences"
-        aria-label="Preferences">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path
-            d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
-          <circle cx="12" cy="12" r="3" />
-        </svg>
-      </button>
-    </div>
-  </header>
-
-  <div id="spinner" class="spinner-card hidden" role="status" aria-label="Loading">
-    <div class="spinner-dots" aria-hidden="true">
-      <div></div>
-      <div></div>
-      <div></div>
-    </div>
-  </div>
-
-  <main id="app">
-    <div id="notice" class="stack">
-      <div id="notice-permission" class="notice hidden" role="status">
-        <div>Site access hasn't been granted yet. It's needed to read pages and request headers.</div>
-        <button id="btn-grant-permission" type="button" class="sm">Grant access</button>
-      </div>
-
-      <div id="notice-no-server" class="notice hidden" role="status">
-        <div>No server configured yet.</div>
-        <button data-key="btn-open-options" type="button" class="sm">Open preferences</button>
-      </div>
-
-      <div id="notice-no-tab-id" class="notice hidden" role="status">
-        Couldn't identify the current tab.
-      </div>
-    </div>
-
-    <section class="card" aria-labelledby="current-heading">
-      <h2 id="current-heading">Current page</h2>
-
-      <div id="current-unarchivable" class="muted hidden">
-        This page can't be archived (only http/https pages).
-      </div>
-
-      <div id="current-meta">
-        <div id="current-title" class="title"></div>
-        <div id="current-url" class="url"></div>
-      </div>
-
-      <div class="row">
-        <div id="current-status-pill-container">
-          <span id="current-status-pill" class="pill muted">Checking…</span>
-        </div>
-        <button id="current-btn-recheck" type="button" class="sm" title="Re-check archive status"
-          aria-label="Re-check archive status">
-          ↻
+        <button
+          data-key="btn-open-options"
+          type="button"
+          class="icon-button"
+          title="Preferences"
+          aria-label="Preferences"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"
+            />
+            <circle cx="12" cy="12" r="3" />
+          </svg>
         </button>
       </div>
+    </header>
 
-      <!-- .error:empty is hidden by CSS, so no manual toggling is needed -->
-      <div id="current-error-container" class="error" role="alert"></div>
-      <ul id="current-versions-list" class="versions"></ul>
-      <div id="current-versions-overflow" class="muted small"></div>
-      <div id="current-last-archived" class="muted small"></div>
-      <div id="current-flash" class="success hidden"></div>
-
-
-      <button id="btn-archive" type="button" class="primary">
-        <span id="btn-archive-text">Archive this page</span>
-        <span id="btn-archive-shortcut" class="small shortcut"></span>
-      </button>
-
-      <!-- Site-wide tags (shared across all versions of this URL) -->
-      <div class="tags-block">
-        <span class="muted small">Tags</span>
-        <div id="current-tags" class="tags"></div>
-        <div id="current-tags-error" class="error small hidden" role="alert"></div>
-        <div class="row">
-          <input id="current-tag-input" class="tag-input" type="text" list="tag-options" maxlength="64"
-            placeholder="Add tag…  (name or name:color)" aria-label="Add a tag (name or name:color)"
-            autocomplete="off" />
-          <button id="current-tag-add" type="button">Add</button>
-        </div>
-        <datalist id="tag-options"></datalist>
+    <div id="spinner" class="spinner-card hidden" role="status" aria-label="Loading">
+      <div class="spinner-dots" aria-hidden="true">
+        <div></div>
+        <div></div>
+        <div></div>
       </div>
-    </section>
+    </div>
 
-    <section class="card" aria-labelledby="pending-heading">
-      <div class="row">
-        <h2 id="pending-heading">Pending</h2>
+    <main id="app">
+      <div id="notice" class="stack">
+        <div id="popup-error" class="error hidden" role="alert"></div>
+
+        <div id="notice-permission" class="notice hidden" role="status">
+          <div>
+            Site access hasn't been granted yet. It's needed to read pages and request headers.
+          </div>
+          <button id="btn-grant-permission" type="button" class="sm">Grant access</button>
+        </div>
+
+        <div id="notice-no-server" class="notice hidden" role="status">
+          <div>No server configured yet.</div>
+          <button data-key="btn-open-options" type="button" class="sm">Open preferences</button>
+        </div>
+
+        <div id="notice-no-tab-id" class="notice hidden" role="status">
+          Couldn't identify the current tab.
+        </div>
+      </div>
+
+      <section class="card" aria-labelledby="current-heading">
+        <h2 id="current-heading">Current page</h2>
+
+        <div id="current-unarchivable" class="muted hidden">
+          This page can't be archived (only http/https pages).
+        </div>
+
+        <div id="current-meta">
+          <div id="current-title" class="title"></div>
+          <div id="current-url" class="url"></div>
+        </div>
+
         <div class="row">
-          <span id="pending-fetched-time" class="muted small hidden"></span>
-          <button id="btn-refresh-pending" type="button" class="sm" title="Refresh pending list"
-            aria-label="Refresh pending list">
-            <span id="refresh-icon" aria-hidden="true">↻</span>
+          <div id="current-status-pill-container">
+            <span id="current-status-pill" class="pill muted">Checking…</span>
+          </div>
+          <button
+            id="current-btn-recheck"
+            type="button"
+            class="sm"
+            title="Re-check archive status"
+            aria-label="Re-check archive status"
+          >
+            ↻
           </button>
         </div>
-      </div>
 
-      <div id="pending-error-container" class="error" role="alert"></div>
-      <div id="pending-empty" class="muted hidden">Nothing pending 🎉</div>
-      <ul id="pending-list" class="pending"></ul>
-      <div id="pending-overflow" class="muted small hidden"></div>
-    </section>
-  </main>
+        <!-- .error:empty is hidden by CSS, so no manual toggling is needed -->
+        <div id="current-error-container" class="error" role="alert"></div>
+        <ul id="current-versions-list" class="versions"></ul>
+        <div id="current-versions-overflow" class="muted small"></div>
+        <div id="current-last-archived" class="muted small"></div>
+        <div id="current-flash" class="success hidden"></div>
 
-  <template id="template-pending-list-item">
-    <li>
-      <div class="grow">
-        <div class="title"></div>
-        <div class="url"></div>
-        <div class="small muted"></div>
-      </div>
-      <button type="button" class="sm tags-btn" title="Edit tags for this queued page">Tags</button>
-      <button type="button" class="sm archive-btn" title="Open in a new tab and archive">Archive</button>
-    </li>
-  </template>
+        <button id="btn-archive" type="button" class="primary">
+          <span id="btn-archive-text">Archive this page</span>
+          <span id="btn-archive-shortcut" class="small shortcut"></span>
+        </button>
 
-  <template id="template-version">
-    <li class="ver">
-      <a class="ver-link" href="#"></a>
-      <time class="ver-time"></time>
-      <span class="ver-ago muted"></span>
-    </li>
-  </template>
+        <!-- Site-wide tags (shared across all versions of this URL) -->
+        <div class="tags-block">
+          <span class="muted small">Tags</span>
+          <div id="current-tags" class="tags"></div>
+          <div id="current-tags-error" class="error small hidden" role="alert"></div>
+          <div class="row">
+            <input
+              id="current-tag-input"
+              class="tag-input"
+              type="text"
+              list="tag-options"
+              maxlength="64"
+              placeholder="Add tag…  (name or name:color)"
+              aria-label="Add a tag (name or name:color)"
+              autocomplete="off"
+            />
+            <button id="current-tag-add" type="button">Add</button>
+          </div>
+          <datalist id="tag-options"></datalist>
+        </div>
+      </section>
 
-  <template id="template-tag-chip">
-    <span class="tag-chip">
-      <span class="tag-chip-name"></span>
-      <button type="button" class="tag-chip-remove" aria-label="Remove tag">×</button>
-    </span>
-  </template>
+      <section class="card" aria-labelledby="pending-heading">
+        <div class="row">
+          <h2 id="pending-heading">Pending</h2>
+          <div class="row">
+            <span id="pending-fetched-time" class="muted small hidden"></span>
+            <button
+              id="btn-refresh-pending"
+              type="button"
+              class="sm"
+              title="Refresh pending list"
+              aria-label="Refresh pending list"
+            >
+              <span id="refresh-icon" aria-hidden="true">↻</span>
+            </button>
+          </div>
+        </div>
 
-  <template id="template-tags-empty">
-    <span class="muted small">No tags yet</span>
-  </template>
-</body>
+        <div id="pending-error-container" class="error" role="alert"></div>
+        <div id="pending-empty" class="muted hidden">Nothing pending 🎉</div>
+        <ul id="pending-list" class="pending"></ul>
+        <div id="pending-overflow" class="muted small hidden"></div>
+      </section>
+    </main>
 
+    <template id="template-pending-list-item">
+      <li>
+        <div class="pending-main">
+          <div class="grow">
+            <div class="title"></div>
+            <div class="url"></div>
+            <div class="small muted"></div>
+          </div>
+          <button type="button" class="sm tags-btn" title="Edit tags for this queued page">
+            Tags
+          </button>
+          <button type="button" class="sm archive-btn" title="Open in a new tab and archive">
+            Archive
+          </button>
+        </div>
+        <div class="pending-tag-editor hidden">
+          <input
+            class="tag-input pending-tag-input"
+            type="text"
+            placeholder="tag1, tag2"
+            aria-label="Tags for this queued page"
+            autocomplete="off"
+          />
+          <button type="button" class="sm pending-tag-save">Save</button>
+          <button type="button" class="sm pending-tag-cancel">Cancel</button>
+        </div>
+        <div class="error small hidden pending-tag-error" role="alert"></div>
+      </li>
+    </template>
+
+    <template id="template-version">
+      <li class="ver">
+        <a class="ver-link" href="#"></a>
+        <time class="ver-time"></time>
+        <span class="ver-ago muted"></span>
+      </li>
+    </template>
+
+    <template id="template-tag-chip">
+      <span class="tag-chip">
+        <span class="tag-chip-name"></span>
+        <button type="button" class="tag-chip-remove" aria-label="Remove tag">×</button>
+      </span>
+    </template>
+
+    <template id="template-tags-empty">
+      <span class="muted small">No tags yet</span>
+    </template>
+  </body>
 </html>

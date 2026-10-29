@@ -1,7 +1,7 @@
 import { ok, wrapErr } from "@common/error";
 import { bgRootlog } from "@common/log";
 import { reqwest } from "./reqwest";
-import { Int, Int64, Option, Page, Vec } from "@common/types";
+import { Int, Int64, Option, Page, toPage, Vec } from "@common/types";
 import { session_storage_set } from "@common/storage";
 import { errorIfServerUnconfigured, getExtensionSettings } from "@common/settings";
 import { canonicalizeUrl, createUrl, extractTabUrl, sha256 } from "@common/index";
@@ -83,26 +83,22 @@ export async function pageVersions(
 
   const reqUrl = createUrl(serverUrl, `/api/pages/${pageId}/captures`);
 
-  let result = await reqwest<Page<ApiCaptureSummary>>(reqUrl, {
+  const [data, error] = await reqwest<unknown>(reqUrl, {
     token,
     timeoutMs: 20000,
   });
   done();
 
-  log[result[1] ? "warn" : "debug"](result[1]);
-
-  if (
-    result[1] &&
-    result[1].reason === "reqwest_api_error" &&
-    result[1].extra.error.code === "not_found"
-  ) {
-    return wrapErr({
-      ...result[1],
-      reason: "not_found",
-    });
+  if (error) {
+    log.warn(error);
+    if (error.reason === "reqwest_api_error" && error.extra.error.code === "not_found") {
+      return wrapErr({ ...error, reason: "not_found" });
+    }
+    return wrapErr(error);
   }
 
-  return result;
+  log.debug("Page versions fetched", { pageId });
+  return ok(toPage<ApiCaptureSummary>(data));
 }
 
 /** Single source of truth for the status-cache key. */
@@ -120,7 +116,7 @@ async function fetchPageAndVersions(
 
   let versions: Page<ApiCaptureSummary>;
   if (page.captureCount === 1) {
-    versions = { items: [page.latestCapture], nextCursor: null };
+    versions = { items: [page.latestCapture], nextCursor: null, total: page.captureCount };
   } else {
     const [fetched, versionsError] = await pageVersions(page.id, ctx);
     if (versionsError) return wrapErr(versionsError);
@@ -157,5 +153,10 @@ export async function pageLookupFull(tabId: Int) {
     inflight.delete(cacheKey),
   );
   inflight.set(cacheKey, promise);
+  // Remember which cache entry belongs to this tab so it can be cleaned up when
+  // the tab closes (the tab's URL is no longer readable at that point).
+  void session_storage_set(`statusKey:${tabId}`, cacheKey).catch((e) =>
+    log.warn("Cannot cache tab status key", e),
+  );
   return promise;
 }

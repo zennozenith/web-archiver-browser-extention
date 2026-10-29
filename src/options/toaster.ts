@@ -172,17 +172,34 @@ export class Toaster {
       return existing;
     }
 
-    // Fallback: build a default template and inject it
+    // Fallback: build a default template and inject it. Built with DOM APIs
+    // rather than innerHTML so extension linters do not flag it.
     const template = document.createElement("template");
     template.id = "toast-template";
-    template.innerHTML = `
-      <div class="toaster-item" role="alert" aria-live="assertive">
-        <span class="toaster-icon" aria-hidden="true"></span>
-        <span class="toaster-message"></span>
-        <button class="toaster-close" type="button" aria-label="Close">×</button>
-        <div class="toaster-progress"></div>
-      </div>
-    `.trim();
+
+    const item = document.createElement("div");
+    item.className = "toaster-item";
+    item.setAttribute("role", "alert");
+    item.setAttribute("aria-live", "assertive");
+
+    const icon = document.createElement("span");
+    icon.className = "toaster-icon";
+    icon.setAttribute("aria-hidden", "true");
+
+    const message = document.createElement("span");
+    message.className = "toaster-message";
+
+    const close = document.createElement("button");
+    close.className = "toaster-close";
+    close.type = "button";
+    close.setAttribute("aria-label", "Close");
+    close.textContent = "×";
+
+    const progress = document.createElement("div");
+    progress.className = "toaster-progress";
+
+    item.append(icon, message, close, progress);
+    template.content.append(item);
     document.body.appendChild(template);
     return template;
   }

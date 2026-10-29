@@ -1,12 +1,12 @@
-import browser from "webextension-polyfill";
-
 import { ok, wrapErr } from "@common/error";
 import { log as rootLog } from "@common/log";
 import { reqwest } from "./reqwest";
-import type { Option, Int64, Vec } from "@common/types";
+import type { Option, Int64, Vec, IdLessTag } from "@common/types";
 import { errorIfServerUnconfigured, getExtensionSettings } from "@common/settings";
-import { sync_storage_set } from "@common/storage";
+import { sync_storage_get, sync_storage_set } from "@common/storage";
 import { canonicalizeUrl, createUrl } from "@common/index";
+
+export type { IdLessTag };
 
 /* Client for the server's tag API
  *   GET  /api/tags              all tags with usage counts
@@ -17,11 +17,6 @@ import { canonicalizeUrl, createUrl } from "@common/index";
  * (the POST /api/archive merge only ever adds tags). */
 
 const log = rootLog.child("tags");
-
-export interface IdLessTag {
-  name: string;
-  color: Option<string>; // palette key, never a hex value
-}
 
 export interface TagDto extends IdLessTag {
   id: Int64;
@@ -42,6 +37,21 @@ const normalize = (t: IdLessTag): IdLessTag => ({
   name: t.name.trim(),
   color: t.color ?? null,
 });
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isTagLike(value: unknown): value is IdLessTag {
+  return isRecord(value) && typeof value["name"] === "string";
+}
+
+/** Accept either a bare tag array or `{ tags: [...] }` from the server. */
+function tagsFromResponse(value: unknown): Vec<IdLessTag> {
+  const raw = Array.isArray(value) ? value : isRecord(value) ? value["tags"] : null;
+  if (!Array.isArray(raw)) return [];
+  return new TagStore(raw.filter(isTagLike)).tags;
+}
 
 export class TagStore {
   private _tags: IdLessTag[] = [];
@@ -97,7 +107,30 @@ export async function listTags({ timeoutMs = 20000 }: { timeoutMs?: number } = {
   const [_, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
   if (serverUnconfigured !== null) return wrapErr(serverUnconfigured);
 
-  return reqwest<Vec<TagWithCountDto>>(createUrl(serverUrl, "/api/tags"), { token, timeoutMs });
+  const [data, error] = await reqwest<unknown>(createUrl(serverUrl, "/api/tags"), {
+    token,
+    timeoutMs,
+  });
+  if (error) return wrapErr(error);
+
+  // Servers may return an array, `{ items: [...] }`, or `{ tags: [...] }`.
+  const raw = Array.isArray(data)
+    ? data
+    : isRecord(data) && Array.isArray(data["items"])
+      ? data["items"]
+      : isRecord(data) && Array.isArray(data["tags"])
+        ? data["tags"]
+        : [];
+
+  const items: Vec<TagWithCountDto> = raw.filter(isRecord).map((tag) => ({
+    id: Number(tag["id"] ?? 0),
+    name: typeof tag["name"] === "string" ? tag["name"] : "",
+    color: typeof tag["color"] === "string" ? tag["color"] : null,
+    created_at: Number(tag["created_at"] ?? 0),
+    pages: Number(tag["pages"] ?? tag["usage"] ?? 0),
+    pending: Number(tag["pending"] ?? 0),
+  }));
+  return ok(items.filter((tag) => tag.name.length > 0));
 }
 
 export type SetPageTag =
@@ -114,17 +147,22 @@ export async function setRemotePageTag(
   const [_, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
   if (serverUnconfigured !== null) return wrapErr(serverUnconfigured);
 
-  // TODO: server only accetps tag name for now
-  const body = { tags: new TagStore(tags).tags };
+  const clean = new TagStore(tags).tags;
+  // The server accepts tag names only; unknown names are created server-side.
+  const body = { tags: clean.map((t) => t.name) };
 
-  // returns TagDto, for typing, returning IdLessTag
-  return reqwest<Vec<IdLessTag>>(createUrl(serverUrl, `/api/pages/${pageId}/tags`), {
+  const [data, error] = await reqwest<unknown>(createUrl(serverUrl, `/api/pages/${pageId}/tags`), {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
     token,
     timeoutMs,
   });
+  if (error) return wrapErr(error);
+
+  // Some servers echo the full tag objects, others return just the names.
+  const returned = tagsFromResponse(data);
+  return ok(returned.length > 0 ? returned : clean);
 }
 
 /** Store the tag set locally for a URL that isn't archived yet. */
@@ -145,8 +183,7 @@ export type GetLocalPageTags = Awaited<ReturnType<typeof getLocalPageTags>>;
 export async function getLocalPageTags(url: string) {
   const key = `tags:${canonicalizeUrl(url)}`;
   try {
-    const stored = await browser.storage.sync.get(key);
-    const tags = (stored[key] ?? []) as IdLessTag[];
+    const tags = (await sync_storage_get<IdLessTag[]>(key)) ?? [];
     return ok(new TagStore(tags).tags);
   } catch (e) {
     log.error("Cannot read local tags", e);

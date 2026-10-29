@@ -36,22 +36,35 @@ export function toDate(dateTime: unknown): Date | null {
   if (dateTime == null || dateTime === "") {
     return null;
   }
-  if (typeof dateTime === "number") return new Date(dateTime < 1e12 ? dateTime * 1000 : dateTime);
-  if (/^\d+(\.\d+)?$/.test(String(dateTime))) return toDate(Number(dateTime));
+  if (dateTime instanceof Date) {
+    return Number.isNaN(dateTime.getTime()) ? null : dateTime;
+  }
+  if (typeof dateTime === "number") {
+    return new Date(dateTime < 1e12 ? dateTime * 1000 : dateTime);
+  }
+  if (typeof dateTime !== "string") {
+    return null;
+  }
 
-  const d = new Date(dateTime as string);
-  return isNaN(d as unknown as number) ? null : d;
+  const trimmed = dateTime.trim();
+  if (/^\d+(\.\d+)?$/.test(trimmed)) return toDate(Number(trimmed));
+
+  const d = new Date(trimmed);
+  return Number.isNaN(d.getTime()) ? null : d;
 }
 
 export const formatTime = (dateTime: unknown): string => {
   const d = toDate(dateTime);
-  return d ? d.toLocaleString() : String(dateTime ?? "unknown time");
+  if (d) return d.toLocaleString();
+  return typeof dateTime === "string" || typeof dateTime === "number"
+    ? String(dateTime)
+    : "unknown time";
 };
 
 export function timeAgo(t: unknown): string {
-  const d = toDate(t) as any;
+  const d = toDate(t);
   if (!d) return "";
-  const s = Math.max(0, Math.round((Date.now() - d) / 1000));
+  const s = Math.max(0, Math.round((Date.now() - d.getTime()) / 1000));
   if (s < 45) return "just now";
   const m = Math.round(s / 60);
   if (m < 60) return `${m}m ago`;

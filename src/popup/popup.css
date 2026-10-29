@@ -429,10 +429,27 @@ button.primary {
 
 .pending li {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
   padding: 6px 0;
   border-bottom: 1px solid var(--border);
+}
+
+.pending-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pending-tag-editor {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pending-tag-editor .tag-input {
+  min-width: 0;
 }
 
 .pending li:last-child {

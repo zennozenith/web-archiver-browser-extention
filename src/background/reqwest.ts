@@ -52,7 +52,7 @@ export async function reqwest<T>(
     timeoutMs,
     body: body instanceof FormData ? "FormData" : body,
   });
-  let res, text;
+  let res: Response, text: string;
   try {
     res = await fetch(url, {
       method,
@@ -71,28 +71,26 @@ export async function reqwest<T>(
       reason: "reqwest_generic",
       detail: isAbort
         ? `Request timed out after ${Math.round(timeoutMs / 1000)}s (${url})`
-        : `Cannot reach server at ${url}: ${errorMessage}`,
+        : `Cannot reach server at ${url}: ${String(errorMessage)}`,
     });
   } finally {
     clearTimeout(timer);
   }
   done(res.status);
 
-  let data: T | null = null;
+  let data: unknown = null;
+  let parsedJson = false;
   try {
-    data = JSON.parse(text) as T;
+    data = JSON.parse(text) as unknown;
+    parsedJson = true;
   } catch {
-    return err({
-      reason: "reqwest_response_not_json",
-      detail: `Response data in not json: ${text}`,
-    });
+    // Not JSON. For error responses the status line is still useful below.
   }
 
   if (res.ok && isApiErrorResponse(data)) {
     return err({
       reason: "reqwest_response_parse",
       detail: `${data.error.code}: ${data.error.message}`,
-      extra: undefined,
     });
   }
 
@@ -101,7 +99,7 @@ export async function reqwest<T>(
     const apiErr = parseApiError(data);
     const msg = apiErr
       ? `${apiErr.error.message} (${apiErr.error.code})`
-      : (text || res.statusText).slice(0, 300);
+      : (text || res.statusText || "empty response").slice(0, 300);
 
     if (apiErr) {
       return err({
@@ -117,7 +115,14 @@ export async function reqwest<T>(
     });
   }
 
-  return ok(data);
+  if (!parsedJson) {
+    return err({
+      reason: "reqwest_response_not_json",
+      detail: `Response data is not json: ${text.slice(0, 300)}`,
+    });
+  }
+
+  return ok(data as T);
 }
 
 function isJsonObject(v: unknown): v is Record<string, unknown> {

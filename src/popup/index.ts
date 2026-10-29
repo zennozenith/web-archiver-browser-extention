@@ -1,17 +1,20 @@
 import { log as rootLog } from "@common/log";
 import { getElementById, q } from "@common/document";
 import { SendToBackground, sendToBackground } from "@common/messaging";
-import { settingsFromStorageSetting } from "@common/settings";
+import { isServerConfigured, settingsFromStorageSetting } from "@common/settings";
 import { ApiCaptureSummary, ApiPageDetail } from "@src/background/page";
 import type { PendingDto } from "@src/background/pending";
 import { IdLessTag, TagStore } from "@src/background/tags";
-import type { Option, Int64, Page, UrlStr } from "@common/types";
+import type { Option, Int64, Page } from "@common/types";
 import { formatTimeFromSec, timeAgoFromSec, toDateFromSec } from "@common/time";
 
 const log = rootLog.child("popup");
 
 const MAX_VERSIONS_SHOWN = 20;
 const SPINNER_DELAY_MS = 300;
+
+/** Set once settings are loaded; used to build links to archived captures. */
+let serverUrl: URL | undefined;
 
 type LookupResult = SendToBackground<"PAGE_LOOKUP_FULL">;
 type PendingResult = SendToBackground<"GET_PENDING">;
@@ -20,7 +23,7 @@ type PendingResult = SendToBackground<"GET_PENDING">;
 // Helpers
 // ---------------------------------------------------------------------------
 
-function openTab(url: UrlStr) {
+function openTab(url: string) {
   void browser.tabs.create({ url });
   window.close();
 }
@@ -64,9 +67,10 @@ function toLookupState([data, error]: LookupResult): LookupState {
   return { kind: "archived", page, versions };
 }
 
-/** TODO: build the real capture URL once the server route is known. */
-function captureHref(_version: ApiCaptureSummary): UrlStr | null {
-  return null;
+/** Link to the archived (rewritten) HTML of one capture. */
+function captureHref(version: ApiCaptureSummary): string | null {
+  if (!serverUrl) return null;
+  return new URL(`/api/captures/${version.id}/html`, serverUrl).toString();
 }
 
 // ---------------------------------------------------------------------------
@@ -100,17 +104,45 @@ class Notice {
   private static noServer = getElementById("notice-no-server", HTMLDivElement);
   private static noTabId = getElementById("notice-no-tab-id", HTMLDivElement);
 
-  static init(opts: { hasPermission: boolean; serverUrl?: URL; hasTabId: boolean }) {
+  static init(opts: { hasPermission: boolean; serverConfigured: boolean; hasTabId: boolean }) {
     show(Notice.permission, !opts.hasPermission);
     show(Notice.noTabId, !opts.hasTabId);
-    show(Notice.noServer, opts.serverUrl === undefined);
+    show(Notice.noServer, !opts.serverConfigured);
+  }
+}
+
+function describeError(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value instanceof Error) return value.message;
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
   }
 }
 
 class ErrorUi {
-  // TODO: surface errors in the UI
+  private static container = getElementById("popup-error", HTMLDivElement);
+
+  static init() {
+    ErrorUi.container.title = "Click to dismiss";
+    ErrorUi.container.addEventListener("click", () => ErrorUi.clear());
+  }
+
   static push(...args: unknown[]) {
     log.error(...args);
+    const message = args
+      .map(describeError)
+      .filter((part) => part.length > 0)
+      .join(" ");
+    if (!message) return;
+    ErrorUi.container.textContent = message;
+    show(ErrorUi.container, true);
+  }
+
+  static clear() {
+    ErrorUi.container.textContent = "";
+    show(ErrorUi.container, false);
   }
 }
 
@@ -353,8 +385,6 @@ class Pending {
     this.errorContainer.textContent = pending.error ? `Last refresh failed: ${pending.error}` : "";
 
     this.heading.textContent = `Pending(${pending.total}${pending.hasMore ? "+" : ""})`;
-
-    this.heading.textContent = `Pending(${pending.total})`;
     this.fetchedTime.textContent = timeAgoFromSec(pending.fetchedAt);
     this.fetchedTime.title = formatTimeFromSec(pending.fetchedAt);
     show(this.fetchedTime, true);
@@ -376,7 +406,13 @@ class Pending {
     const titleEl = q<HTMLDivElement>(clone, ".title");
     const urlEl = q<HTMLDivElement>(clone, ".url");
     const tagsEl = q<HTMLDivElement>(clone, ".small.muted");
+    const tagsBtn = q<HTMLButtonElement>(clone, ".tags-btn");
     const actionBtn = q<HTMLButtonElement>(clone, ".sm.archive-btn");
+    const editor = q<HTMLDivElement>(clone, ".pending-tag-editor");
+    const input = q<HTMLInputElement>(clone, ".pending-tag-input");
+    const saveBtn = q<HTMLButtonElement>(clone, ".pending-tag-save");
+    const cancelBtn = q<HTMLButtonElement>(clone, ".pending-tag-cancel");
+    const errorEl = q<HTMLDivElement>(clone, ".pending-tag-error");
 
     titleEl.title = item.title || item.url;
     titleEl.textContent = item.title || displayUrl(item.url);
@@ -384,8 +420,11 @@ class Pending {
     urlEl.title = item.url;
     urlEl.textContent = `${item.url} · ${timeAgoFromSec(item.createdAt)}`;
 
-    const tagNames = item.tags.map((t) => t.name);
-    tagsEl.textContent = tagNames.length ? `Tags: ${tagNames.join(", ")}` : "No tags";
+    const renderTags = () => {
+      const tagNames = item.tags.map((t) => t.name);
+      tagsEl.textContent = tagNames.length ? `Tags: ${tagNames.join(", ")}` : "No tags";
+    };
+    renderTags();
 
     actionBtn.addEventListener("click", async () => {
       log.debug("Pending list archive requested", { url: item.url });
@@ -393,7 +432,60 @@ class Pending {
       window.close();
     });
 
-    // TODO: tag-edit and archive buttons for pending items
+    const closeEditor = () => {
+      editor.classList.add("hidden");
+      errorEl.textContent = "";
+      show(errorEl, false);
+      tagsBtn.disabled = false;
+    };
+
+    tagsBtn.addEventListener("click", () => {
+      input.value = item.tags.map((t) => t.name).join(", ");
+      editor.classList.remove("hidden");
+      tagsBtn.disabled = true;
+      input.focus();
+    });
+
+    cancelBtn.addEventListener("click", closeEditor);
+
+    const save = async () => {
+      saveBtn.disabled = true;
+      input.disabled = true;
+      errorEl.textContent = "";
+      show(errorEl, false);
+
+      const tags = input.value
+        .split(",")
+        .map(parseTagInput)
+        .filter((tag): tag is IdLessTag => tag !== null);
+
+      const [saved, error] = await sendToBackground("SET_PENDING_TAGS", {
+        id: item.id,
+        tags,
+      });
+
+      saveBtn.disabled = false;
+      input.disabled = false;
+
+      if (error) {
+        errorEl.textContent = `Couldn't save tags: ${error.detail}`;
+        show(errorEl, true);
+        return;
+      }
+
+      item.tags = saved;
+      renderTags();
+      closeEditor();
+    };
+
+    saveBtn.addEventListener("click", () => void save());
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.isComposing) {
+        e.preventDefault();
+        void save();
+      }
+    });
+
     return clone;
   }
 }
@@ -437,7 +529,6 @@ class Tag {
       this.tagStore.tags = state.page.tags;
       this.pageId = state.page.id;
     }
-    // TODO: for "not_archived", load locally stored tags (needs a background message).
 
     this.renderChips();
 
@@ -597,8 +688,9 @@ class Tag {
 async function hasAllUrlsPermission(): Promise<boolean> {
   try {
     return await browser.permissions.contains({ origins: ["<all_urls>"] });
-  } catch {
-    return true; // TODO: should this be false?
+  } catch (e) {
+    log.warn("Cannot check site access permission", e);
+    return false;
   }
 }
 
@@ -657,12 +749,15 @@ async function init() {
     return;
   }
 
+  const configured = isServerConfigured(settings);
+  serverUrl = configured ? settings.serverUrl : undefined;
+
   Notice.init({
     hasPermission,
-    serverUrl: settings.serverUrl,
+    serverConfigured: configured,
     hasTabId: tab?.id !== undefined,
   });
-  bindChrome(settings.serverUrl);
+  bindChrome(serverUrl);
 
   if (!tab || tab.id === undefined) return;
 
@@ -675,18 +770,14 @@ async function init() {
 
   const tagUi = tab.url ? new Tag(tab.url, state) : null;
   if (tagUi && state.kind === "not_archived") await tagUi.loadLocalTags();
-  if (tagUi && settings.serverUrl) void tagUi.loadSuggestions();
+  if (tagUi && configured) void tagUi.loadSuggestions();
 
   new CurrentPage(tab, state, shortcut, () => tagUi?.currentTags ?? []);
   new Pending(pendingResult);
-
-  if (tab.url) {
-    const tags = new Tag(tab.url, state);
-    if (state.kind === "not_archived") await tags.loadLocalTags();
-  }
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
+  ErrorUi.init();
   Loading.show();
   try {
     await init();
