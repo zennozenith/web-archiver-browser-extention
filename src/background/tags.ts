@@ -1,7 +1,8 @@
 import { ok, wrapErr } from "@common/error";
 import { log as rootLog } from "@common/log";
 import { reqwest } from "./reqwest";
-import type { Option, Int64, Vec, IdLessTag } from "@common/types";
+import type { ReplaceTagsRequest, Tag, TagSummary } from "@common/api-types";
+import type { IdLessTag, Int64 } from "@common/types";
 import { errorIfServerUnconfigured, getExtensionSettings } from "@common/settings";
 import { sync_storage_get, sync_storage_set } from "@common/storage";
 import { canonicalizeUrl, createUrl } from "@common/index";
@@ -9,49 +10,20 @@ import { canonicalizeUrl, createUrl } from "@common/index";
 export type { IdLessTag };
 
 /* Client for the server's tag API
- *   GET  /api/tags              all tags with usage counts
- *   PUT  /api/pages/:id/tags    replace a page's (site-wide) tag set
+ *   GET  /api/tag             all tags with usage counts
+ *   PUT  /api/page/:id/tag    replace a page's (site-wide) tag set
  *
  * Tags are site-wide: every archived version of a URL shares the same list.
  * Unknown tag names are created server-side. Removals must go through the PUT
- * (the POST /api/archive merge only ever adds tags). */
+ * (the archive endpoint only attaches the tags present on the page row). */
 
 const log = rootLog.child("tags");
 
-export interface TagDto extends IdLessTag {
-  id: Int64;
-  createdAt: Int64;
-}
-
-export interface TagWithCountDto {
-  id: Int64;
-  name: string;
-  color: Option<string>;
-  created_at: Int64;
-  pages: Int64;
-  pending: Int64;
-}
-
 /** Strip server-only fields so the store only ever holds { name, color }. */
-const normalize = (t: IdLessTag): IdLessTag => ({
-  name: t.name.trim(),
-  color: t.color ?? null,
+const normalize = (tag: IdLessTag): IdLessTag => ({
+  name: tag.name.trim(),
+  color: tag.color ?? null,
 });
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isTagLike(value: unknown): value is IdLessTag {
-  return isRecord(value) && typeof value["name"] === "string";
-}
-
-/** Accept either a bare tag array or `{ tags: [...] }` from the server. */
-function tagsFromResponse(value: unknown): Vec<IdLessTag> {
-  const raw = Array.isArray(value) ? value : isRecord(value) ? value["tags"] : null;
-  if (!Array.isArray(raw)) return [];
-  return new TagStore(raw.filter(isTagLike)).tags;
-}
 
 export class TagStore {
   private _tags: IdLessTag[] = [];
@@ -66,71 +38,60 @@ export class TagStore {
 
   /** A copy, so callers can't mutate internal state. */
   get tags(): IdLessTag[] {
-    return this._tags.map((t) => ({ ...t }));
+    return this._tags.map((tag) => ({ ...tag }));
   }
 
   /** Replace the whole list, deduplicating by name. Later entries win. */
   set tags(next: readonly IdLessTag[]) {
     const byName = new Map<string, IdLessTag>();
-    for (const t of next) {
-      const n = normalize(t);
-      if (n.name) byName.set(n.name, n);
+    for (const tag of next) {
+      const normalized = normalize(tag);
+      if (normalized.name) byName.set(normalized.name, normalized);
     }
     this._tags = [...byName.values()];
   }
 
   get(name: string): IdLessTag | undefined {
-    return this._tags.find((t) => t.name === name);
+    return this._tags.find((tag) => tag.name === name);
   }
 
   /** Insert, or update an existing tag. A null color keeps the existing color. */
   upsertTag(tag: IdLessTag): void {
-    const n = normalize(tag);
-    if (!n.name) return;
-    const i = this._tags.findIndex((t) => t.name === n.name);
-    if (i === -1) this._tags.push(n);
-    else this._tags[i] = { name: n.name, color: n.color ?? this._tags[i].color };
+    const normalized = normalize(tag);
+    if (!normalized.name) return;
+    const index = this._tags.findIndex((tag) => tag.name === normalized.name);
+    if (index === -1) this._tags.push(normalized);
+    else
+      this._tags[index] = {
+        name: normalized.name,
+        color: normalized.color ?? this._tags[index].color,
+      };
   }
 
   removeTag(name: string): void {
-    this._tags = this._tags.filter((t) => t.name !== name);
+    this._tags = this._tags.filter((tag) => tag.name !== name);
   }
 
   hasTag(name: string): boolean {
-    return this._tags.some((t) => t.name === name);
+    return this._tags.some((tag) => tag.name === name);
   }
 }
 
-/** All tags known to the server, with usage counts (for suggestions/autocomplete). */
+export type ListTags = Awaited<ReturnType<typeof listTags>>;
+
+/** All tags known to the server, with usage counts (for suggestions). */
 export async function listTags({ timeoutMs = 20000 }: { timeoutMs?: number } = {}) {
   const { serverUrl, token } = await getExtensionSettings();
-  const [_, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
+  const [, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
   if (serverUnconfigured !== null) return wrapErr(serverUnconfigured);
 
-  const [data, error] = await reqwest<unknown>(createUrl(serverUrl, "/api/tags"), {
+  const [tags, error] = await reqwest<TagSummary[]>(createUrl(serverUrl, "/api/tag"), {
     token,
     timeoutMs,
   });
   if (error) return wrapErr(error);
 
-  // Servers may return an array, `{ items: [...] }`, or `{ tags: [...] }`.
-  const raw = Array.isArray(data)
-    ? data
-    : isRecord(data) && Array.isArray(data["items"])
-      ? data["items"]
-      : isRecord(data) && Array.isArray(data["tags"])
-        ? data["tags"]
-        : [];
-
-  const items: Vec<TagWithCountDto> = raw.filter(isRecord).map((tag) => ({
-    id: Number(tag["id"] ?? 0),
-    name: typeof tag["name"] === "string" ? tag["name"] : "",
-    color: typeof tag["color"] === "string" ? tag["color"] : null,
-    created_at: Number(tag["created_at"] ?? 0),
-    pages: Number(tag["pages"] ?? tag["usage"] ?? 0),
-    pending: Number(tag["pending"] ?? 0),
-  }));
-  return ok(items.filter((tag) => tag.name.length > 0));
+  return ok(tags.filter((tag) => tag.name.length > 0));
 }
 
 export type SetPageTag =
@@ -144,14 +105,14 @@ export async function setRemotePageTag(
   { timeoutMs = 20000 }: { timeoutMs?: number } = {},
 ) {
   const { serverUrl, token } = await getExtensionSettings();
-  const [_, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
+  const [, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
   if (serverUnconfigured !== null) return wrapErr(serverUnconfigured);
 
-  const clean = new TagStore(tags).tags;
-  // The server accepts tag names only; unknown names are created server-side.
-  const body = { tags: clean.map((t) => t.name) };
+  const body: ReplaceTagsRequest = {
+    tags: new TagStore(tags).tags.map(({ name, color }) => ({ name, color })),
+  };
 
-  const [data, error] = await reqwest<unknown>(createUrl(serverUrl, `/api/pages/${pageId}/tags`), {
+  const [saved, error] = await reqwest<Tag[]>(createUrl(serverUrl, `/api/page/${pageId}/tag`), {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -160,9 +121,7 @@ export async function setRemotePageTag(
   });
   if (error) return wrapErr(error);
 
-  // Some servers echo the full tag objects, others return just the names.
-  const returned = tagsFromResponse(data);
-  return ok(returned.length > 0 ? returned : clean);
+  return ok(new TagStore(saved).tags);
 }
 
 /** Store the tag set locally for a URL that isn't archived yet. */
@@ -190,5 +149,3 @@ export async function getLocalPageTags(url: string) {
     return wrapErr({ reason: "storage", detail: String(e) });
   }
 }
-
-export type ListTags = Awaited<ReturnType<typeof listTags>>;

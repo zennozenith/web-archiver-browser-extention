@@ -1,24 +1,12 @@
 import { reqwest, type TestEndpointResponse } from "./reqwest";
+import type { HealthResponse, Stats } from "@common/api-types";
 import { createUrl } from "@common/index";
-
-/** `GET /api/health` — lightweight liveness check. */
-export interface HealthResponse {
-  status?: string;
-  urls?: number;
-  versions?: number;
-  pending?: number;
-  [key: string]: unknown;
-}
-
-/** `GET /api/stats` — totals and deduplication savings. */
-export interface StatsResponse {
-  [key: string]: unknown;
-}
 
 function formatCount(value: unknown): string | null {
   return typeof value === "number" && Number.isFinite(value) ? String(value) : null;
 }
 
+/** `GET /api/health` — lightweight liveness check. */
 export async function testHealth(serverUrl: URL, token?: string): Promise<TestEndpointResponse> {
   const [res, error] = await reqwest<HealthResponse>(createUrl(serverUrl, "/api/health"), {
     token,
@@ -29,23 +17,12 @@ export async function testHealth(serverUrl: URL, token?: string): Promise<TestEn
     return { ok: false, text: `health ✗ ${error.detail}` };
   }
 
-  const counts = [
-    ["urls", formatCount(res.urls)],
-    ["versions", formatCount(res.versions)],
-    ["pending", formatCount(res.pending)],
-  ]
-    .filter(([, value]) => value !== null)
-    .map(([label, value]) => `${label}: ${value}`);
-
-  const status = typeof res.status === "string" ? res.status : "online";
-  return {
-    ok: true,
-    text: `health ✓ ${status}${counts.length ? ` (${counts.join(", ")})` : ""}`,
-  };
+  return { ok: true, text: `health ✓ ${res.status}` };
 }
 
+/** `GET /api/stats` — totals and deduplication savings. */
 export async function testStats(serverUrl: URL, token?: string): Promise<TestEndpointResponse> {
-  const [res, error] = await reqwest<StatsResponse>(createUrl(serverUrl, "/api/stats"), {
+  const [res, error] = await reqwest<Stats>(createUrl(serverUrl, "/api/stats"), {
     token,
     timeoutMs: 20000,
   });
@@ -55,10 +32,10 @@ export async function testStats(serverUrl: URL, token?: string): Promise<TestEnd
   }
 
   const counts = [
-    ["pages", formatCount(res.pages ?? res.urls)],
-    ["captures", formatCount(res.captures ?? res.versions)],
-    ["pending", formatCount(res.pending)],
-    ["content", formatCount(res.content ?? res.blobs)],
+    ["pages", formatCount(res.pages)],
+    ["captures", formatCount(res.captures)],
+    ["tags", formatCount(res.tags)],
+    ["queued", formatCount(res.queue?.queued)],
   ]
     .filter(([, value]) => value !== null)
     .map(([label, value]) => `${label}: ${value}`);

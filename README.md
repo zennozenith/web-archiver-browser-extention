@@ -12,7 +12,7 @@ Built with TypeScript, Vite+ (`vp`), and [`@crxjs/vite-plugin`](https://crxjs.de
 - **Tags** — add site-wide tags from the popup; tags are shared across all versions of a URL and merged server-side.
 - **Pending queue** — a periodic (configurable alarm-based) background refresh keeps a list of pending archives, and items can be re-tagged from the popup before archiving.
 - **Open and archive** — archive a URL without visiting it first.
-- **Connection test** — the options page checks `/api/health`, `/api/stats`, `/api/pending`, and `/api/pages/lookup` against the configured server.
+- **Connection test** — the options page checks `/api/health`, `/api/stats`, `/api/pending`, and `/api/page/lookup` against the configured server.
 - **Badge feedback** — a small toast/notification with success/error feedback on archiving.
 - **Native-feeling integration** — respects the browser API differences between Chrome (Blink / service worker) and Firefox (Gecko / background scripts, `captureTab`).
 
@@ -63,15 +63,17 @@ NODE_ENV=production ./build.sh
 
 The extension only needs your server's base URL; every API path is derived from it:
 
-| Path                  | Purpose                                    |
-| --------------------- | ------------------------------------------ |
-| `/api/archive`        | Submit a new page archive                  |
-| `/api/pages/lookup`   | Check whether a URL is already archived    |
-| `/api/pages/:id/tags` | Read/replace the tag set for a site        |
-| `/api/pending`        | List/manage the server-side pending queue  |
-| `/api/tags`           | List known tags for autocomplete           |
-| `/api/health`         | Connection test (liveness + queue counts)  |
-| `/api/stats`          | Connection test (archive/dedup statistics) |
+| Path                         | Purpose                                    |
+| ---------------------------- | ------------------------------------------ |
+| `POST /api/page`             | Save a link (title, notes, tags, etc.)     |
+| `POST /api/page/:id/capture` | Archive a new snapshot of a saved link     |
+| `/api/page/lookup`           | Check whether a URL is already saved       |
+| `PUT /api/page/:id/tag`      | Replace the tag set for a site             |
+| `/api/collection`            | List collections for the popup select      |
+| `/api/pending`               | List/manage the server-side pending queue  |
+| `/api/tag`                   | List known tags for autocomplete           |
+| `/api/health`                | Connection test (liveness)                 |
+| `/api/stats`                 | Connection test (archive/dedup statistics) |
 
 Endpoint configuration and a connection test ("Test connection") live in the options page.
 

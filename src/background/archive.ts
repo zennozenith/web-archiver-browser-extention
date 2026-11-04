@@ -1,22 +1,22 @@
 import { WebRequest } from "webextension-polyfill";
 import browser from "webextension-polyfill";
 
-import { err, ok, isStandardError, wrapErr } from "@common/error";
+import { err, ok, isStandardError, wrapErr, type Result } from "@common/error";
 import { bgRootlog } from "@common/log";
 import { reqwest, TestEndpointResponse } from "./reqwest";
-import { Int, Int64, Option, Vec } from "@common/types";
+import type { ArchiveResponse, PageDetail, PageItem } from "@common/api-types";
+import type { IdLessTag, Int, Int64, Vec } from "@common/types";
 import { session_storage_delete, session_storage_get, session_storage_set } from "@common/storage";
 import { errorIfServerUnconfigured, getExtensionSettings } from "@common/settings";
 import { canonicalizeUrl, createUrl, extractTabUrl, sha256 } from "@common/index";
-import type { IdLessTag } from "./tags";
 import { Screenshot, takeScreenshot } from "./screenshot";
 import { injectBanner } from "./browser-scripting";
 import { updateBadge } from "./badge";
 import { collectPage, type Page } from "./content-scripts";
-import { ApiPageDetail, pageLookup } from "./page";
+import { createPage, pageLookup } from "./page";
+import { setRemotePageTag } from "./tags";
 
 const log = bgRootlog.child("archive");
-
 const logCapture = bgRootlog.child("capture");
 
 export interface HeadersDetails {
@@ -31,17 +31,9 @@ export interface HeadersDetails {
   statusCode: number;
 }
 
-export interface Dedup {
-  html: boolean;
-  originalHtml: boolean;
-  screenshot: Option<boolean>;
-}
-
-export interface ApiArchiveResponse {
-  capture_id: Int64;
-  page_id: Int64;
-  version: Int64;
-  deduplicated: Dedup;
+export interface ArchiveResult {
+  response: ArchiveResponse;
+  warnings: string[];
 }
 
 const busyTabs = new Set<Int>();
@@ -49,7 +41,7 @@ const busyTabs = new Set<Int>();
 const sleep = (ms: Int) => new Promise((resolve) => setTimeout(resolve, ms));
 const headerMemory = new Map<Int, Partial<HeadersDetails>>();
 
-export function mergeTagNames(...lists: Vec<IdLessTag>[]): IdLessTag[] {
+function mergeTags(...lists: readonly (readonly IdLessTag[])[]): IdLessTag[] {
   const byName = new Map<string, IdLessTag>();
   for (const list of lists) for (const tag of list) byName.set(tag.name, tag);
   return [...byName.values()];
@@ -68,7 +60,6 @@ async function headersToObject(
   keepSensitive: boolean = false,
 ): Promise<Record<string, string>> {
   const extensionSettings = await getExtensionSettings();
-
   const headersMap: Record<string, string> = {};
 
   for (const { name, value } of headerList || []) {
@@ -99,7 +90,17 @@ export function patchHeaders(tabId: Int, requestId: string, patch: Partial<Heade
   session_storage_set(`hdr:${tabId}`, next).catch(() => {});
 }
 
-async function archiveTab(tabId: Int, { tags }: { tags?: Vec<IdLessTag> } = {}) {
+/**
+ * Capture the current tab and upload it as a new version of `pageId`.
+ *
+ * The page itself must already exist; use `createPage` or `resolvePageForArchive`
+ * first. Failures are returned as a `Result`, never thrown.
+ */
+export async function archivePage(
+  tabId: Int,
+  pageId: Int64,
+  { pendingId }: { pendingId?: Int64 } = {},
+): Promise<Result<ArchiveResult>> {
   const {
     serverUrl,
     token,
@@ -113,7 +114,7 @@ async function archiveTab(tabId: Int, { tags }: { tags?: Vec<IdLessTag> } = {}) 
     requestTimeoutSec,
     saveAssets,
   } = await getExtensionSettings();
-  const [_, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
+  const [, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
   if (serverUnconfigured !== null) return wrapErr(serverUnconfigured);
 
   const [url, error] = await extractTabUrl(tabId, log);
@@ -135,17 +136,12 @@ async function archiveTab(tabId: Int, { tags }: { tags?: Vec<IdLessTag> } = {}) 
     await session_storage_delete(`archiveError:${tabId}`);
 
     const tab = await browser.tabs.get(tabId);
-    log.info("Archiving page", { tabId, url, title: tab.title });
+    log.info("Archiving page", { tabId, pageId, url, title: tab.title });
 
-    await updateBadge({
-      tabId,
-      text: "…",
-      color: "#5f6368",
-      title: "Archiving…",
-    });
+    await updateBadge({ tabId, text: "…", color: "#5f6368", title: "Archiving…" });
 
-    let results: browser.Scripting.InjectionResult[];
     const doneCollect = log.time("collect page");
+    let results: browser.Scripting.InjectionResult[];
     try {
       results = await browser.scripting.executeScript({ target: { tabId }, func: collectPage });
     } catch (e) {
@@ -157,6 +153,7 @@ async function archiveTab(tabId: Int, { tags }: { tags?: Vec<IdLessTag> } = {}) 
       });
     }
     doneCollect(`fetch ${results?.[0]?.result ? "ok" : "empty"}`);
+
     const page = results?.[0]?.result as Page | undefined;
     if (!page) {
       return err({
@@ -171,7 +168,7 @@ async function archiveTab(tabId: Int, { tags }: { tags?: Vec<IdLessTag> } = {}) 
 
     if (includeScreenshot) {
       const doneShot = log.time("screenshot");
-      const [shot, error] = await takeScreenshot({
+      const [shot] = await takeScreenshot({
         tab,
         page,
         screenshotFormat,
@@ -179,27 +176,21 @@ async function archiveTab(tabId: Int, { tags }: { tags?: Vec<IdLessTag> } = {}) 
         jpegQuality,
         warnings,
       });
-      if (error === null) {
-        doneShot(shot.ext, shot.blob.size);
-      }
+      if (shot) doneShot(shot.ext, shot.blob.size);
       maybeScreenshot = shot;
     }
 
     const headers = await getHeadersWithDetails(tabId);
     if (!headers) {
-      log.warn(
-        "No request headers recorded for this tab (page was loaded before the extension started)",
-      );
-      warnings.push(
-        "No request headers recorded for this tab (page was loaded before the extension started)",
-      );
+      const message =
+        "No request headers recorded for this tab (page was loaded before the extension started)";
+      log.warn(message);
+      warnings.push(message);
     } else if (headers.url && canonicalizeUrl(headers.url) !== canonicalizeUrl(page.url)) {
-      log.warn(
-        "Recorded headers belong to a different URL (page navigated via script/history browser)",
-      );
-      warnings.push(
-        "Recorded headers belong to a different URL (page navigated via script/history browser)",
-      );
+      const message =
+        "Recorded headers belong to a different URL (page navigated via script/history browser)";
+      log.warn(message);
+      warnings.push(message);
     }
 
     const { html, title, url: pageUrl, scrollWidth, scrollHeight, ...pageInfo } = page;
@@ -247,47 +238,35 @@ async function archiveTab(tabId: Int, { tags }: { tags?: Vec<IdLessTag> } = {}) 
       warnings,
     };
 
-    const formData = new FormData();
-    formData.append("html", htmlBlob);
-    formData.append("url", canonicalizeUrl(url));
-    formData.append("title", title);
-    formData.append("save-assets", saveAssets ? "true" : "false");
-
-    if (tags?.length) {
-      formData.append("tags", JSON.stringify(tags.map((v) => v.name)));
-    }
-
+    const form = new FormData();
+    form.append("html", htmlBlob);
+    form.append("metadata", JSON.stringify(metadata));
+    form.append("saveAssets", saveAssets ? "true" : "false");
+    if (title.trim()) form.append("title", title);
+    if (pendingId !== undefined) form.append("pendingId", String(pendingId));
     if (maybeScreenshot !== null) {
-      formData.append("screenshot-format", maybeScreenshot.format);
-      formData.append("screenshot", maybeScreenshot.blob, `screenshot.${maybeScreenshot.ext}`);
+      form.append("screenshot", maybeScreenshot.blob, `screenshot.${maybeScreenshot.ext}`);
     }
-    formData.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
-    // Includes tags queued via the pending queue (created server-side if unknown).
 
     log.info("Uploading archive", {
+      pageId,
       url: pageUrl,
       htmlBytes: htmlBlob.size,
       screenshotBytes: maybeScreenshot !== null ? maybeScreenshot.blob.size : null,
     });
 
-    const [response, error] = await reqwest<ApiArchiveResponse>(
-      createUrl(serverUrl, "/api/archive"),
+    const [response, uploadError] = await reqwest<ArchiveResponse>(
+      createUrl(serverUrl, `/api/page/${pageId}/capture`),
       {
         method: "POST",
-        body: formData,
+        body: form,
         token,
         timeoutMs: (Number(requestTimeoutSec) || 120) * 1000,
       },
     );
+    if (uploadError) return wrapErr(uploadError);
 
-    if (error) {
-      return wrapErr(error);
-    }
-
-    return ok({
-      response,
-      warnings,
-    });
+    return ok({ response, warnings });
   } catch (e) {
     log.error("Archive request failed", e);
     return err({
@@ -302,7 +281,66 @@ async function archiveTab(tabId: Int, { tags }: { tags?: Vec<IdLessTag> } = {}) 
   }
 }
 
+interface ResolvedPage {
+  page: PageItem;
+  created: boolean;
+}
+
+/**
+ * Find the server's page row for the tab, creating an unsaved link when needed.
+ * This keeps the archive-only actions working without a separate save step.
+ */
+async function resolvePageForArchive(
+  tabId: Int,
+  { tags }: { tags?: readonly IdLessTag[] } = {},
+): Promise<Result<ResolvedPage>> {
+  const { serverUrl, token } = await getExtensionSettings();
+  const [, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
+  if (serverUnconfigured !== null) return wrapErr(serverUnconfigured);
+
+  const [url, urlError] = await extractTabUrl(tabId, log);
+  if (urlError) return wrapErr(urlError);
+
+  const canonicalUrl = canonicalizeUrl(url);
+  const [page, lookupError] = await pageLookup(canonicalUrl, { serverUrl, token });
+
+  if (!lookupError) return ok({ page, created: false });
+  if (lookupError.reason !== "not_found") return wrapErr(lookupError);
+
+  const tab = await browser.tabs.get(tabId);
+  const [created, createError] = await createPage({
+    url: canonicalUrl,
+    displayTitle: tab.title?.trim() || canonicalUrl,
+    tags,
+  });
+  if (createError) return wrapErr(createError);
+  return ok({ page: created, created: true });
+}
+
 export type ArchiveTab = Awaited<ReturnType<typeof archiveWithFeedback>>;
+
+async function archiveTab(
+  tabId: Int,
+  { tags, pendingId }: { tags?: readonly IdLessTag[]; pendingId?: Int64 } = {},
+) {
+  const [resolved, resolveError] = await resolvePageForArchive(tabId, { tags });
+  if (resolveError) return wrapErr(resolveError);
+
+  const [result, archiveError] = await archivePage(tabId, resolved.page.id, { pendingId });
+  if (archiveError) return wrapErr(archiveError);
+
+  // Tags chosen for an already-saved page are merged after the capture, so an
+  // archive failure does not silently rewrite the page's tags.
+  if (!resolved.created && tags?.length) {
+    const merged = mergeTags(resolved.page.tags, tags);
+    const [, tagError] = await setRemotePageTag(resolved.page.id, merged);
+    if (tagError) {
+      result.warnings.push(`Snapshot saved, but tags could not be updated: ${tagError.detail}`);
+    }
+  }
+
+  return ok(result);
+}
 
 async function reportArchiveFailure(
   tabId: Int,
@@ -330,10 +368,10 @@ async function reportArchiveFailure(
 
 export async function archiveWithFeedback(
   tabId: Int,
-  { toast, tags }: { toast: boolean; tags?: Vec<IdLessTag> },
+  { toast, tags, pendingId }: { toast: boolean; tags?: Vec<IdLessTag>; pendingId?: Int64 },
 ) {
   try {
-    const [res, error] = await archiveTab(tabId, { tags });
+    const [res, error] = await archiveTab(tabId, { tags, pendingId });
     if (error !== null) {
       await reportArchiveFailure(tabId, error.detail, { toast });
       return wrapErr(error);
@@ -349,7 +387,6 @@ export async function archiveWithFeedback(
   } catch (e) {
     const errorMessage = isStandardError(e) ? e.message : String(e);
     log.error("Archive failed", errorMessage, e);
-
     await reportArchiveFailure(tabId, errorMessage, { toast });
 
     return err({
@@ -361,12 +398,33 @@ export async function archiveWithFeedback(
   }
 }
 
-export async function openAndArchive(url: string, tags: string[] = []) {
+export async function openAndArchive(
+  url: string,
+  { tags = [], pendingId }: { tags?: string[]; pendingId?: Int64 } = {},
+) {
   const tab = await browser.tabs.create({ url, active: true });
   logCapture.info("Opened new tab for direct archive", { url, tabId: tab.id });
-  // Pending items only carry tag names; store the same shape as archive tags.
   const tagObjects: Vec<IdLessTag> = tags.map((name) => ({ name, color: null }));
-  await session_storage_set(`open:${tab.id}`, { url, at: Date.now(), tags: tagObjects });
+  await session_storage_set(`open:${tab.id}`, {
+    url,
+    at: Date.now(),
+    tags: tagObjects,
+    pendingId,
+  });
+}
+
+/** Pending id parked by `handleOpened` for the banner's archive action. */
+const pendingArchiveKey = (tabId: Int) => `archivePending:${tabId}`;
+
+export async function takePendingArchiveId(tabId: Int): Promise<Int64 | undefined> {
+  const key = pendingArchiveKey(tabId);
+  const pendingId = await session_storage_get(key);
+  await session_storage_delete(key);
+  return typeof pendingId === "number" ? pendingId : undefined;
+}
+
+export function clearPendingArchiveId(tabId: Int): Promise<void> {
+  return session_storage_delete(pendingArchiveKey(tabId));
 }
 
 export async function handleOpened(tabId: Int) {
@@ -374,12 +432,13 @@ export async function handleOpened(tabId: Int) {
     url: string;
     at: number;
     tags?: Vec<IdLessTag>;
+    pendingId?: Int64;
   } | null;
   await session_storage_delete(`open:${tabId}`);
 
   const { serverUrl, directArchiveMode, directArchiveDelaySec, defaultTags, token } =
     await getExtensionSettings();
-  const [_, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
+  const [, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
   if (serverUnconfigured !== null) return wrapErr(serverUnconfigured);
 
   await sleep(Math.max(0, Number(directArchiveDelaySec) || 0) * 1000);
@@ -387,24 +446,31 @@ export async function handleOpened(tabId: Int) {
   logCapture.debug(`Direct-archive mode: ${directArchiveMode}`, { tabId });
 
   if (directArchiveMode === "auto") {
-    // Per-URL pending tags are merged inside archiveTab automatically.
-    void archiveWithFeedback(tabId, { toast: true, tags: opened?.tags ?? undefined });
+    void archiveWithFeedback(tabId, {
+      toast: true,
+      tags: opened?.tags ?? undefined,
+      pendingId: opened?.pendingId,
+    });
   } else {
-    // Prompt mode: offer a tag chip row (site's current/default tags, preselected)
-    // before confirming; chosen tags are sent with ARCHIVE_FROM_PAGE.
-    const defaults = mergeTagNames(Vec.from(defaultTags), opened?.tags ?? []);
+    // The banner sends a separate message when the user confirms; keep the
+    // pending id around so that archive also dequeues the item.
+    if (opened?.pendingId !== undefined) {
+      await session_storage_set(pendingArchiveKey(tabId), opened.pendingId);
+    }
 
-    const [urlToLookUp, error2] = await extractTabUrl(tabId, log);
-    if (error2) return wrapErr(error2);
+    const defaults = mergeTags(defaultTags, opened?.tags ?? []);
+
+    const [urlToLookUp, error] = await extractTabUrl(tabId, log);
+    if (error) return wrapErr(error);
     const url = canonicalizeUrl(urlToLookUp);
 
-    const [page, error] = await pageLookup(url, { serverUrl, token });
-    const siteTags = error === null && page ? page.tags : [];
+    const [page, lookupError] = await pageLookup(url, { serverUrl, token });
+    const siteTags = lookupError === null ? page.tags : [];
     await injectBanner(tabId, {
       kind: "",
       mode: "prompt",
       text: "Archive this page?",
-      tags: mergeTagNames(siteTags, defaults),
+      tags: mergeTags(siteTags, defaults),
     });
   }
 }
@@ -419,9 +485,9 @@ export async function testPageStatus(
     queryUrl?: string;
   } = {},
 ): Promise<TestEndpointResponse> {
-  const reqUrl = createUrl(serverUrl, "/api/pages/lookup");
+  const reqUrl = createUrl(serverUrl, "/api/page/lookup");
   reqUrl.searchParams.set("url", queryUrl);
-  const [response, error] = await reqwest<ApiPageDetail>(reqUrl, {
+  const [response, error] = await reqwest<PageDetail>(reqUrl, {
     token,
     timeoutMs: 20000,
   });

@@ -5,7 +5,7 @@ import type { Err, Fail, Ok, Result } from "./error.ts";
 import { err } from "./error.ts";
 import type { TestEndpointResponse } from "@src/background/reqwest.ts";
 import type { StorageExtensionSettings } from "./settings.ts";
-import type { PageLookupFull } from "@src/background/page.ts";
+import type { PageLookupFull, UpdatePage } from "@src/background/page.ts";
 import type {
   GetPendingFromStorage,
   RefreshPending,
@@ -13,6 +13,9 @@ import type {
 } from "@src/background/pending.ts";
 import type { GetLocalPageTags, IdLessTag, ListTags, SetPageTag } from "@src/background/tags.ts";
 import type { ArchiveTab } from "@src/background/archive.ts";
+import type { ListCollections } from "@src/background/collections.ts";
+import type { SaveLink, SaveLinkPayload } from "@src/background/save-link.ts";
+import type { PatchPageRequest } from "./api-types.ts";
 
 const log = rootLog.child("messaging");
 
@@ -37,9 +40,15 @@ export interface MessageMap {
     data: SetPageTag;
   };
   GET_LOCAL_TAGS: { payload: { url: string }; data: GetLocalPageTags };
-  ARCHIVE_TAB: { payload: { tabId: Int; tags: Vec<IdLessTag> }; data: ArchiveTab };
+  ARCHIVE_TAB: { payload: { tabId: Int; tags?: Vec<IdLessTag> }; data: ArchiveTab };
   LIST_TAGS: { payload: undefined; data: ListTags };
-  OPEN_AND_ARCHIVE: { payload: { url: string; tags?: string[] }; data: Result<boolean> };
+  LIST_COLLECTIONS: { payload: undefined; data: ListCollections };
+  UPDATE_PAGE: { payload: { id: Int64; patch: PatchPageRequest }; data: UpdatePage };
+  SAVE_LINK: { payload: SaveLinkPayload; data: SaveLink };
+  OPEN_AND_ARCHIVE: {
+    payload: { url: string; tags?: string[]; pendingId?: Int64 };
+    data: Result<boolean>;
+  };
   ARCHIVE_FROM_PAGE: {
     payload: { tags: Vec<IdLessTag> };
     data: ArchiveTab | Fail<{ reason: "no_tab_id"; detail: string }>;

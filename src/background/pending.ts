@@ -2,7 +2,13 @@ import browser from "webextension-polyfill";
 
 import { ok, err, wrapErr } from "@common/error";
 import { bgRootlog as log } from "@common/log";
-import type { Option, Int64, Vec, IdLessTag } from "@common/types";
+import type {
+  CreatePendingRequest,
+  PatchPendingRequest,
+  PendingItem,
+  PendingStatus,
+} from "@common/api-types";
+import type { IdLessTag, Int64, Vec } from "@common/types";
 import { toPage } from "@common/types";
 import { errorIfServerUnconfigured, getExtensionSettings } from "@common/settings";
 import { reqwest } from "./reqwest";
@@ -12,32 +18,20 @@ import { createUrl } from "@common/index";
 
 /* Pending queue client.
  *
- * Tags queued with a URL live on the SERVER (`pending.tags` on both servers):
- * - POST   /api/pending      { url, title?, tags? }
- * - GET    /api/pending      -> { items: [{ id, url, title, addedAt, tags }], total }
+ * Tags queued with a URL live on the SERVER:
+ * - POST   /api/pending      { url, tags? }
+ * - GET    /api/pending      -> { items: [...], nextCursor }
  * - PATCH  /api/pending/:id  { tags }          replace the queued tags
- * The archive handler merges the queued tags into the site on first archive and
- * removes the pending row, so nothing needs to be kept in extension storage. */
+ * The archive handler attaches the queued tags on first archive and removes the
+ * pending row, so nothing needs to be kept in extension storage. */
 
-export type PendingStatus = "queued" | "in_progress" | "failed";
-
-export interface PendingDto {
-  id: Int64;
-  url: string;
-  title: Option<string>;
-  status: PendingStatus;
-  attempts: Int64;
-  lastError: Option<string>;
-  createdAt: UnixEpochSeconds;
-  /* tag names queued with this URL (server-authoritative) */
-  tags: Vec<IdLessTag>;
-}
+export type { PendingStatus };
 
 export interface PendingInStorage {
   fetchedAt: UnixEpochSeconds;
   total: number;
-  hasMore: boolean; //  server has more items than were returned
-  items: PendingDto[];
+  hasMore: boolean; // server has more items than were returned
+  items: PendingItem[];
   error?: string;
 }
 
@@ -60,11 +54,10 @@ export async function getPendingFromStorage() {
   return ok<PendingInStorage>(pending);
 }
 
-/** Fetch the server's pending queue and cache the result in
- *  browser.storage.local ("pending"). */
+/** Fetch the server's pending queue and cache the result in storage.local. */
 export async function refreshPending() {
   const { serverUrl, token, pendingLimit } = await getExtensionSettings();
-  const [_, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
+  const [, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
   if (serverUnconfigured !== null) return wrapErr(serverUnconfigured);
 
   const reqUrl = createUrl(serverUrl, "/api/pending");
@@ -85,7 +78,7 @@ export async function refreshPending() {
 
   let data: PendingInStorage;
   if (raw !== null) {
-    const res = toPage<PendingDto>(raw);
+    const res = toPage<PendingItem>(raw);
     const total = res.total ?? res.items.length;
     data = {
       fetchedAt: nowUnixEpochSeconds(),
@@ -106,45 +99,40 @@ export async function refreshPending() {
   await browser.storage.local.set({ pending: data });
   log[raw !== null ? "debug" : "warn"]("Pending refresh", { total: data.total });
 
-  if (resError) {
-    return wrapErr(resError);
-  }
+  if (resError) return wrapErr(resError);
   return ok(data);
 }
 
-/** Add an URL (with optional queued tags) to the server's pending queue. */
-export async function addPending(
-  url: string,
-  { title, tags }: { title?: string; tags?: string[] } = {},
-) {
+/** Add a URL (with optional queued tags) to the server's pending queue. */
+export async function addPending(url: string, { tags }: { tags?: string[] } = {}) {
   const { serverUrl, token } = await getExtensionSettings();
-  const [_, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
+  const [, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
   if (serverUnconfigured !== null) return wrapErr(serverUnconfigured);
 
-  const res = await reqwest<PendingDto>(createUrl(serverUrl, "/api/pending"), {
+  const body: CreatePendingRequest = { url, tags };
+  const res = await reqwest<PendingItem>(createUrl(serverUrl, "/api/pending"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url, title, tags }),
+    body: JSON.stringify(body),
     token,
     timeoutMs: 20000,
   });
 
   if (res[0] !== null) {
-    log.debug("Pending tags created", { id: res[0].id, url, tags });
+    log.debug("Pending item created", { id: res[0].id, url, tags });
   }
-
   return res;
 }
 
 /**
  * Replace the tags queued for a pending item.
  *
- * The server accepts tag names only (`{ tags: ["name", ...] }`), and unknown
- * names are created server-side when the URL is archived.
+ * The server accepts tag names only; unknown names are created when the URL is
+ * archived.
  */
 export async function updatePendingTags(id: Int64, tags: readonly IdLessTag[]) {
   const { serverUrl, token } = await getExtensionSettings();
-  const [_, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
+  const [, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
   if (serverUnconfigured !== null) return wrapErr(serverUnconfigured);
 
   const seen = new Set<string>();
@@ -156,57 +144,32 @@ export async function updatePendingTags(id: Int64, tags: readonly IdLessTag[]) {
     clean.push({ name, color: tag.color ?? null });
   }
 
-  const [data, error] = await reqwest<unknown>(createUrl(serverUrl, `/api/pending/${id}`), {
+  const body: PatchPendingRequest = { tags: clean.map((tag) => tag.name) };
+  const [pending, error] = await reqwest<PendingItem>(createUrl(serverUrl, `/api/pending/${id}`), {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tags: clean.map((t) => t.name) }),
+    body: JSON.stringify(body),
     token,
     timeoutMs: 20000,
   });
   if (error) return wrapErr(error);
 
-  // Prefer the server's canonical tag list when it echoes one back.
-  const returned = tagsFromPendingResponse(data);
-  const saved = returned.length > 0 ? returned : clean;
-
   // Keep the cached list in sync so reopening the popup does not show stale tags.
   try {
-    const { pending } = (await browser.storage.local.get({ pending: null })) as {
+    const { pending: cached } = (await browser.storage.local.get({ pending: null })) as {
       pending: PendingInStorage | null;
     };
-    if (pending) {
-      const items = pending.items.map((item) => (item.id === id ? { ...item, tags: saved } : item));
-      await browser.storage.local.set({ pending: { ...pending, items } });
+    if (cached) {
+      const items = cached.items.map((item) =>
+        item.id === id ? { ...item, tags: pending.tags ?? [] } : item,
+      );
+      await browser.storage.local.set({ pending: { ...cached, items } });
     }
   } catch (e) {
     log.warn("Cannot update cached pending tags", e);
   }
 
-  return ok<Vec<IdLessTag>>(saved);
-}
-
-function tagsFromPendingResponse(value: unknown): Vec<IdLessTag> {
-  if (typeof value !== "object" || value === null) return [];
-  const record = value as Record<string, unknown>;
-  const item =
-    typeof record["item"] === "object" && record["item"] !== null
-      ? (record["item"] as Record<string, unknown>)
-      : record;
-  const raw = item["tags"];
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .map((tag) => {
-      if (typeof tag === "string") return { name: tag, color: null };
-      if (typeof tag === "object" && tag !== null && "name" in tag) {
-        const t = tag as { name: unknown; color?: unknown };
-        return {
-          name: String(t.name),
-          color: typeof t.color === "string" ? t.color : null,
-        };
-      }
-      return null;
-    })
-    .filter((tag): tag is IdLessTag => tag !== null && tag.name.length > 0);
+  return ok(pending.tags ?? []);
 }
 
 /** GET /api/pending — used for the endpoint test. */
@@ -222,7 +185,7 @@ export async function testPending(serverUrl: URL, token?: string) {
       text: `pending ✗ ${error.detail}`,
     } satisfies TestEndpointResponse;
   }
-  const res = toPage<PendingDto>(raw);
+  const res = toPage<PendingItem>(raw);
   return {
     ok: true,
     text: `pending ✓ (${res.items.length} item(s))`,

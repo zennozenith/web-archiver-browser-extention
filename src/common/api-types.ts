@@ -261,7 +261,7 @@ export interface LookupPageQuery {
 
 /**
  * Multipart fields for `POST /api/page`. These are literal multipart field
- * names (`display_title` is required); `tags` is comma-separated, not a JSON
+ * names (`displayTitle` is required); `tags` is comma-separated, not a JSON
  * array.
  */
 export interface CreatePageRequest {
@@ -269,7 +269,7 @@ export interface CreatePageRequest {
   displayTitle: string;
   description?: string;
   /** Numeric id as a string; invalid/empty values become `null`. */
-  collection_id?: string;
+  collectionId?: string;
   pinned?: MultipartBoolean;
   /** Comma-separated tag names. */
   tags?: string;

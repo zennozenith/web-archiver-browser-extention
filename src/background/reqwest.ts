@@ -115,6 +115,12 @@ export async function reqwest<T>(
     });
   }
 
+  // `204 No Content` (and bodies that are intentionally empty) are valid for
+  // mutations such as PATCH /api/page/:id.
+  if (res.status === 204 || res.status === 205 || text.trim() === "") {
+    return ok(null as T);
+  }
+
   if (!parsedJson) {
     return err({
       reason: "reqwest_response_not_json",

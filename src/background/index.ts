@@ -3,10 +3,12 @@ import browser from "webextension-polyfill";
 import { ok, Result, err, wrapErr } from "@common/error";
 import {
   archiveWithFeedback,
+  clearPendingArchiveId,
   deleteHeaderMemory,
   handleOpened,
   openAndArchive,
   patchHeaders,
+  takePendingArchiveId,
   testPageStatus,
 } from "./archive";
 import { getPendingFromStorage, refreshPending, testPending, updatePendingTags } from "./pending";
@@ -24,8 +26,10 @@ import {
 import { applyStatusBadge } from "./badge";
 import { testHealth, testStats } from "./api";
 import { TestEndpointResponse } from "./reqwest";
-import { pageLookupFull, statusCacheKey } from "./page";
+import { pageLookupFull, patchPage, statusCacheKey } from "./page";
 import { getLocalPageTags, setLocalPageTag, setRemotePageTag, listTags } from "./tags";
+import { listCollections } from "./collections";
+import { saveLink } from "./save-link";
 
 /* Popup/options pages forward their log entries here so everything shows up
    in this (service worker) console. */
@@ -97,6 +101,7 @@ browser.tabs.onRemoved.addListener(async (tabId) => {
   const keys = [`hdr:${tabId}`, `statusKey:${tabId}`, `archiveError:${tabId}`, `open:${tabId}`];
   if (statusKey) keys.push(statusKey);
   session_storage_delete(...keys).catch(() => {});
+  await clearPendingArchiveId(tabId).catch(() => {});
 });
 
 browser.commands.onCommand.addListener(async (cmd) => {
@@ -281,10 +286,14 @@ registerHandlers({
 
   GET_LOCAL_TAGS: ({ url }) => getLocalPageTags(url),
   LIST_TAGS: () => listTags(),
+  LIST_COLLECTIONS: () => listCollections(),
+  UPDATE_PAGE: ({ id, patch }) => patchPage(id, patch),
+
+  SAVE_LINK: (payload) => saveLink(payload),
 
   ARCHIVE_TAB: async ({ tabId, tags }) => {
-    // `tags` is optional: when given, they are sent along with the archive request
-    // (the server merges them into the site's existing tags, creating unknown ones).
+    // `tags` is optional: when given, they are merged into the page after the
+    // snapshot succeeds.
     return await archiveWithFeedback(tabId, { toast: false, tags });
   },
 
@@ -292,9 +301,9 @@ registerHandlers({
     return await updatePendingTags(id, tags);
   },
 
-  OPEN_AND_ARCHIVE: async ({ url, tags }) => {
+  OPEN_AND_ARCHIVE: async ({ url, tags, pendingId }) => {
     try {
-      await openAndArchive(url, tags ?? []);
+      await openAndArchive(url, { tags, pendingId });
       return ok(true);
     } catch (e) {
       return err({
@@ -314,6 +323,8 @@ registerHandlers({
       });
     }
 
-    return await archiveWithFeedback(sender.tab.id, { toast: false, tags });
+    // Present only when this tab was opened from the pending queue.
+    const pendingId = await takePendingArchiveId(sender.tab.id);
+    return await archiveWithFeedback(sender.tab.id, { toast: false, tags, pendingId });
   },
 });

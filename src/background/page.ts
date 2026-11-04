@@ -1,107 +1,129 @@
-import { ok, wrapErr } from "@common/error";
+import { ok, wrapErr, type Err, type Result } from "@common/error";
 import { bgRootlog } from "@common/log";
 import { reqwest } from "./reqwest";
-import { Int, Int64, Option, Page, toPage, Vec } from "@common/types";
+import type {
+  CaptureHistoryResponse,
+  PageDetail,
+  PageItem,
+  PatchPageRequest,
+} from "@common/api-types";
+import type { IdLessTag, Int, Int64 } from "@common/types";
 import { session_storage_set } from "@common/storage";
 import { errorIfServerUnconfigured, getExtensionSettings } from "@common/settings";
 import { canonicalizeUrl, createUrl, extractTabUrl, sha256 } from "@common/index";
-import { TagDto } from "./tags";
 
 const log = bgRootlog.child("page");
 
-export type PageLookup = Awaited<ReturnType<typeof pageLookup>>;
-export type PageVersion = Awaited<ReturnType<typeof pageVersions>>;
-export type PageLookupFull = Awaited<ReturnType<typeof pageLookupFull>>;
+export type PageLookup = Result<PageDetail>;
+export type PageLookupFull = Result<readonly [PageDetail, CaptureHistoryResponse]>;
+export type UpdatePage = Result<boolean>;
 
-export interface ApiPageDto {
-  id: Int64;
+/** Everything an API call needs; callers usually already have settings loaded. */
+export interface ApiContext {
+  serverUrl: URL;
+  token: string;
+}
+
+export interface CreatePageInput {
   url: string;
-  host: string;
-  displayTitle: Option<string>;
-  description: Option<string>;
-  pinned: boolean;
-  collectionId: number;
-  captureCount: Int64;
-  lastCapturedAt: Option<Int64>;
-  tags: Vec<TagDto>;
-}
-
-export interface ApiCaptureSummary {
-  id: Int64;
-  version: Int64;
-  capturedAt: Int64;
-  title: Option<string>;
-  statusCode: Option<string>;
-  contentHash: Option<string>; // hex
-  hasScreenshot: boolean;
-}
-
-export interface ApiPageDetail extends ApiPageDto {
-  latestCapture: ApiCaptureSummary;
+  displayTitle: string;
+  description?: string;
+  /** Numeric collection id as a string; `null` or empty means Unsorted. */
+  collectionId?: string | null;
+  pinned?: boolean;
+  tags?: readonly IdLessTag[];
 }
 
 const inflight = new Map<string, ReturnType<typeof fetchPageAndVersions>>();
 
-export async function pageLookup(
-  canonicalizeLookupUrl: string,
-  { token, serverUrl }: { serverUrl: URL; token: string },
-) {
-  let url = canonicalizeLookupUrl;
-  log.debug("Page lookup", { url: url });
-
-  const done = log.time("status check");
-
-  const reqUrl = createUrl(serverUrl, "/api/pages/lookup");
-  reqUrl.searchParams.set("url", url);
-
-  let result = await reqwest<ApiPageDetail>(reqUrl, {
-    token,
-    timeoutMs: 20000,
-  });
-  done();
-
-  log[result[1] ? "warn" : "debug"](result[1]);
-
-  if (
-    result[1] &&
-    result[1].reason === "reqwest_api_error" &&
-    result[1].extra.error.code === "not_found"
-  ) {
-    return wrapErr({
-      ...result[1],
-      reason: "not_found",
-    });
-  }
-
-  return result;
+function isNotFound(error: Err): boolean {
+  return (
+    error.reason === "reqwest_api_error" &&
+    typeof error.extra === "object" &&
+    error.extra !== null &&
+    (error.extra as { error?: { code?: string } }).error?.code === "not_found"
+  );
 }
 
-export async function pageVersions(
-  pageId: Int64,
-  { token, serverUrl }: { serverUrl: URL; token: string },
-) {
-  log.debug("Page version lookup", { pageId });
+/** `GET /api/page/lookup?url=...` — the saved page plus its latest capture. */
+export async function pageLookup(url: string, { token, serverUrl }: ApiContext) {
+  log.debug("Page lookup", { url });
 
-  const done = log.time("page version");
+  const reqUrl = createUrl(serverUrl, "/api/page/lookup");
+  reqUrl.searchParams.set("url", url);
 
-  const reqUrl = createUrl(serverUrl, `/api/pages/${pageId}/captures`);
-
-  const [data, error] = await reqwest<unknown>(reqUrl, {
+  const done = log.time("status check");
+  const [page, error] = await reqwest<PageDetail>(reqUrl, {
     token,
     timeoutMs: 20000,
   });
   done();
 
   if (error) {
-    log.warn(error);
-    if (error.reason === "reqwest_api_error" && error.extra.error.code === "not_found") {
-      return wrapErr({ ...error, reason: "not_found" });
-    }
-    return wrapErr(error);
+    return wrapErr(isNotFound(error) ? { ...error, reason: "not_found" as const } : error);
   }
+  return ok(page);
+}
 
-  log.debug("Page versions fetched", { pageId });
-  return ok(toPage<ApiCaptureSummary>(data));
+/** `GET /api/page/:id/capture` — capture history, newest first. */
+export async function pageVersions(pageId: Int64, { token, serverUrl }: ApiContext) {
+  log.debug("Page version lookup", { pageId });
+
+  const done = log.time("page version");
+  const [history, error] = await reqwest<CaptureHistoryResponse>(
+    createUrl(serverUrl, `/api/page/${pageId}/capture`),
+    { token, timeoutMs: 20000 },
+  );
+  done();
+
+  if (error) {
+    return wrapErr(isNotFound(error) ? { ...error, reason: "not_found" as const } : error);
+  }
+  return ok(history);
+}
+
+/** `POST /api/page` — create a link (or return the existing page for the URL). */
+export async function createPage(input: CreatePageInput) {
+  const { serverUrl, token } = await getExtensionSettings();
+  const [, unconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
+  if (unconfigured !== null) return wrapErr(unconfigured);
+
+  const form = new FormData();
+  form.set("url", input.url);
+  form.set("displayTitle", input.displayTitle);
+  form.set("pinned", input.pinned ? "true" : "false");
+
+  if (input.description) form.set("description", input.description);
+  if (input.collectionId) form.set("collectionId", input.collectionId);
+  if (input.tags?.length) form.set("tags", input.tags.map((tag) => tag.name).join(","));
+
+  const [page, error] = await reqwest<PageItem>(createUrl(serverUrl, "/api/page"), {
+    method: "POST",
+    body: form,
+    token,
+    timeoutMs: 20000,
+  });
+
+  if (error) return wrapErr(error);
+  return ok(page);
+}
+
+/** `PATCH /api/page/:id` — only the supplied fields change. */
+export async function patchPage(id: Int64, patch: PatchPageRequest) {
+  const { serverUrl, token } = await getExtensionSettings();
+  const [, unconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
+  if (unconfigured !== null) return wrapErr(unconfigured);
+
+  const [, error] = await reqwest<null>(createUrl(serverUrl, `/api/page/${id}`), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+    token,
+    timeoutMs: 20000,
+  });
+
+  if (error) return wrapErr(error);
+  return ok(true);
 }
 
 /** Single source of truth for the status-cache key. */
@@ -109,21 +131,19 @@ export async function statusCacheKey(canonicalUrl: string): Promise<string> {
   return `status:${await sha256(canonicalUrl)}`;
 }
 
-async function fetchPageAndVersions(
-  url: string,
-  cacheKey: string,
-  ctx: { serverUrl: URL; token: string },
-) {
+async function fetchPageAndVersions(url: string, cacheKey: string, ctx: ApiContext) {
   const [page, pageError] = await pageLookup(url, ctx);
   if (pageError) return wrapErr(pageError);
 
-  let versions: Page<ApiCaptureSummary>;
-  if (page.captureCount === 1) {
-    versions = { items: [page.latestCapture], nextCursor: null, total: page.captureCount };
+  let versions: CaptureHistoryResponse;
+  if (page.captureCount === 0) {
+    versions = { items: [], nextCursor: null };
+  } else if (page.captureCount === 1 && page.latestCapture) {
+    versions = { items: [page.latestCapture], nextCursor: null };
   } else {
-    const [fetched, versionsError] = await pageVersions(page.id, ctx);
+    const [history, versionsError] = await pageVersions(page.id, ctx);
     if (versionsError) return wrapErr(versionsError);
-    versions = fetched;
+    versions = history;
   }
 
   const out = ok([page, versions] as const);
@@ -135,7 +155,7 @@ async function fetchPageAndVersions(
   return out;
 }
 
-export async function pageLookupFull(tabId: Int) {
+export async function pageLookupFull(tabId: Int): Promise<PageLookupFull> {
   const { serverUrl, token } = await getExtensionSettings();
   const [, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
   if (serverUnconfigured !== null) return wrapErr(serverUnconfigured);
@@ -156,6 +176,7 @@ export async function pageLookupFull(tabId: Int) {
     inflight.delete(cacheKey),
   );
   inflight.set(cacheKey, promise);
+
   // Remember which cache entry belongs to this tab so it can be cleaned up when
   // the tab closes (the tab's URL is no longer readable at that point).
   void session_storage_set(`statusKey:${tabId}`, cacheKey).catch((e) =>
