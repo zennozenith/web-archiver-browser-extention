@@ -8,9 +8,11 @@
   --border: #d8dee4;
   --accent: #2563eb;
   --ok: #188038;
+  --okbg: #e8f5ec;
   --warn: #b26a00;
   --err: #d93025;
   --errbg: #fdecea;
+  --pin: #d97706;
 
   --radius: 6px;
   --versions-row-h: 28px;
@@ -26,9 +28,11 @@
     --border: #383c42;
     --accent: #5b9bff;
     --ok: #5bd17f;
+    --okbg: #1e2e24;
     --warn: #f0b04a;
     --err: #ff7b72;
     --errbg: #3a2020;
+    --pin: #f0b04a;
   }
 }
 
@@ -69,10 +73,19 @@ body {
   font-size: 11px;
 }
 
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+
 .stack {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.stack.tight {
+  gap: 4px;
 }
 
 .stack:empty,
@@ -85,6 +98,10 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+.row.tight {
+  gap: 6px;
 }
 
 .title,
@@ -132,16 +149,14 @@ body {
 main {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 10px 12px;
+  gap: 10px;
+  padding: 10px 12px 12px;
 }
 
 h2 {
   margin: 0;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .card {
@@ -162,6 +177,53 @@ a {
 
 a:hover {
   text-decoration: underline;
+}
+
+/* ---------- Form controls ---------- */
+
+.input {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.input:focus-visible {
+  border-color: var(--accent);
+  outline-offset: 0;
+}
+
+.input:disabled {
+  opacity: 0.55;
+}
+
+textarea.input {
+  resize: vertical;
+  min-height: 44px;
+  max-height: 140px;
+}
+
+.title-input {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.check input {
+  margin: 0;
+  accent-color: var(--accent);
 }
 
 /* ---------- Buttons ---------- */
@@ -199,12 +261,14 @@ button.primary {
 }
 
 .shortcut {
+  margin-left: 6px;
   font-weight: 400;
-  opacity: 0.85;
+  color: var(--muted);
 }
 
 .icon-button {
   display: inline-flex;
+  flex: none;
   align-items: center;
   justify-content: center;
   width: 32px;
@@ -234,6 +298,21 @@ button.primary {
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+/* Pin toggle: the star fills in when pinned. */
+.pin {
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.pin[aria-pressed="true"] {
+  color: var(--pin);
+  border-color: var(--pin);
+}
+
+.pin[aria-pressed="true"] svg {
+  fill: currentColor;
 }
 
 /* ---------- Status ---------- */
@@ -269,6 +348,15 @@ button.primary {
   word-break: break-word;
 }
 
+.success {
+  padding: 6px 8px;
+  color: var(--ok);
+  background: var(--okbg);
+  border: 1px solid var(--ok);
+  border-radius: var(--radius);
+  word-break: break-word;
+}
+
 .notice {
   display: flex;
   flex-direction: column;
@@ -277,6 +365,47 @@ button.primary {
   color: var(--warn);
   border: 1px solid var(--warn);
   border-radius: var(--radius);
+}
+
+/* ---------- Collapsible cards (snapshots, queue) ---------- */
+
+.fold {
+  gap: 0;
+  padding: 0;
+}
+
+.fold > summary {
+  padding: 8px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 8px;
+}
+
+.fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.fold > summary::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+
+.fold[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+.fold-body {
+  padding: 0 10px 10px;
 }
 
 /* ---------- Versions ---------- */
@@ -295,6 +424,7 @@ button.primary {
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
 
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
@@ -337,7 +467,6 @@ button.primary {
   border-radius: 3px;
 }
 
-/* static variant (no url): not a link, don't look like one */
 .ver-link:not([href]),
 .ver-link[aria-disabled="true"] {
   color: inherit;
@@ -351,20 +480,13 @@ button.primary {
 }
 
 .ver-ago {
-  min-width: 5ch; /* stops "1h" / "12m" from jittering */
+  min-width: 5ch;
   text-align: right;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
 /* ---------- Tags ---------- */
-
-.tags-block {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 8px;
-}
 
 .tags {
   display: flex;
@@ -379,7 +501,7 @@ button.primary {
   padding: 1px 4px 1px 8px;
   font-size: 12px;
   white-space: nowrap;
-  background: var(--card);
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 999px;
 }
@@ -397,23 +519,7 @@ button.primary {
   color: var(--err);
 }
 
-.tag-input {
-  flex: 1;
-  min-width: 0;
-  padding: 6px 8px;
-  font-size: 12px;
-  color: var(--fg);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-
-.tag-input:focus-visible {
-  border-color: var(--accent);
-  outline-offset: 0;
-}
-
-/* ---------- Pending ---------- */
+/* ---------- Queue ---------- */
 
 .pending {
   max-height: 240px;
@@ -436,6 +542,10 @@ button.primary {
   border-bottom: 1px solid var(--border);
 }
 
+.pending li:last-child {
+  border-bottom: 0;
+}
+
 .pending-main {
   display: flex;
   align-items: center;
@@ -446,19 +556,6 @@ button.primary {
   display: flex;
   align-items: center;
   gap: 6px;
-}
-
-.pending-tag-editor .tag-input {
-  min-width: 0;
-}
-
-.pending li:last-child {
-  border-bottom: 0;
-}
-
-.pending .grow {
-  flex: 1;
-  min-width: 0;
 }
 
 /* ---------- Spinners ---------- */
@@ -520,5 +617,8 @@ button.primary {
   .spin,
   .spinner-dots div {
     animation-duration: 3s;
+  }
+  .fold > summary::before {
+    transition: none;
   }
 }

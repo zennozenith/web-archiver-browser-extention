@@ -51,7 +51,7 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   autoCheck: true,
   directArchiveDelaySec: 2,
   directArchiveMode: "prompt", // prompt | auto
-  saveAssets: true,
+  saveAssets: false,
   fullPageScreenshot: false, // Firefox only
   includeRequestHeaders: true,
   includeResponseHeaders: true,

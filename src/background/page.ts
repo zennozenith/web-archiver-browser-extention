@@ -17,7 +17,10 @@ export interface ApiPageDto {
   id: Int64;
   url: string;
   host: string;
-  title: Option<string>;
+  displayTitle: Option<string>;
+  description: Option<string>;
+  pinned: boolean;
+  collectionId: number;
   captureCount: Int64;
   lastCapturedAt: Option<Int64>;
   tags: Vec<TagDto>;

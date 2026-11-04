@@ -1,10 +1,12 @@
+// popup.ts
 import { log as rootLog } from "@common/log";
 import { getElementById, q } from "@common/document";
 import { SendToBackground, sendToBackground } from "@common/messaging";
 import { isServerConfigured, settingsFromStorageSetting } from "@common/settings";
-import { ApiCaptureSummary, ApiPageDetail } from "@src/background/page";
+import type { ApiCaptureSummary, ApiPageDetail } from "@src/background/page";
+import type { ApiCollection } from "@src/background/collections";
 import type { PendingDto } from "@src/background/pending";
-import { IdLessTag, TagStore } from "@src/background/tags";
+import { type IdLessTag, TagStore } from "@src/background/tags";
 import type { Option, Int64, Page } from "@common/types";
 import { formatTimeFromSec, timeAgoFromSec, toDateFromSec } from "@common/time";
 
@@ -12,6 +14,11 @@ const log = rootLog.child("popup");
 
 const MAX_VERSIONS_SHOWN = 20;
 const SPINNER_DELAY_MS = 300;
+
+/** Remembers the "Also archive a snapshot" checkbox between popup opens. */
+const ARCHIVE_PREF_KEY = "archiveOnSave";
+/** One-shot message shown after the popup reloads itself following a save. */
+const FLASH_KEY = "popup-flash";
 
 /** Set once settings are loaded; used to build links to archived captures. */
 let serverUrl: URL | undefined;
@@ -51,26 +58,65 @@ function displayUrl(raw: string): string {
   }
 }
 
-/** Single place that interprets the lookup result for the whole popup. */
+/** Parses "name" or "name:color" into a tag. Returns null for an empty name. */
+function parseTagInput(raw: string): IdLessTag | null {
+  const sep = raw.indexOf(":");
+  const name = (sep === -1 ? raw : raw.slice(0, sep)).trim();
+  if (!name) return null;
+  const color = sep === -1 ? null : raw.slice(sep + 1).trim() || null;
+  return { name, color };
+}
+
+function tagsKey(tags: readonly IdLessTag[]): string {
+  return tags
+    .map((t) => `${t.name.toLowerCase()}:${t.color ?? ""}`)
+    .sort()
+    .join("|");
+}
+
+/** The page lookup, interpreted once for the whole popup. */
 type LookupState =
-  | { kind: "archived"; page: ApiPageDetail; versions: Page<ApiCaptureSummary> }
-  | { kind: "not_archived" }
+  | { kind: "saved"; page: ApiPageDetail; versions: Page<ApiCaptureSummary> }
+  | { kind: "not_saved" }
   | { kind: "unavailable"; reason: string; detail: string };
 
 function toLookupState([data, error]: LookupResult): LookupState {
   if (error) {
     return error.reason === "not_found"
-      ? { kind: "not_archived" }
+      ? { kind: "not_saved" }
       : { kind: "unavailable", reason: error.reason, detail: error.detail };
   }
   const [page, versions] = data;
-  return { kind: "archived", page, versions };
+  return { kind: "saved", page, versions };
 }
 
 /** Link to the archived (rewritten) HTML of one capture. */
 function captureHref(version: ApiCaptureSummary): string | null {
   if (!serverUrl) return null;
-  return new URL(`/api/captures/${version.id}/html`, serverUrl).toString();
+  return new URL(`/api/capture/${version.id}/html`, serverUrl).toString();
+}
+
+async function readArchivePref(): Promise<boolean> {
+  try {
+    const stored = await browser.storage.local.get(ARCHIVE_PREF_KEY);
+    return stored[ARCHIVE_PREF_KEY] !== false; // default on
+  } catch {
+    return true;
+  }
+}
+
+function writeArchivePref(value: boolean) {
+  void browser.storage.local.set({ [ARCHIVE_PREF_KEY]: value }).catch(() => {});
+}
+
+function describeError(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value instanceof Error) return value.message;
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -96,7 +142,7 @@ class Loading {
 }
 
 // ---------------------------------------------------------------------------
-// Notices
+// Notices & global errors
 // ---------------------------------------------------------------------------
 
 class Notice {
@@ -108,16 +154,6 @@ class Notice {
     show(Notice.permission, !opts.hasPermission);
     show(Notice.noTabId, !opts.hasTabId);
     show(Notice.noServer, !opts.serverConfigured);
-  }
-}
-
-function describeError(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (value instanceof Error) return value.message;
-  try {
-    return JSON.stringify(value) ?? String(value);
-  } catch {
-    return String(value);
   }
 }
 
@@ -147,156 +183,499 @@ class ErrorUi {
 }
 
 // ---------------------------------------------------------------------------
-// Current page
+// Save-link form (current page)
 // ---------------------------------------------------------------------------
 
-class CurrentPage {
-  private unarchivable = getElementById("current-unarchivable", HTMLDivElement);
-  private meta = getElementById("current-meta", HTMLDivElement);
-  private title = getElementById("current-title", HTMLDivElement);
-  private url = getElementById("current-url", HTMLDivElement);
+/** What the form edits. `collectionId: null` means Unsorted. */
+interface Draft {
+  title: string;
+  description: string;
+  collectionId: Option<Int64>;
+  pinned: boolean;
+  tags: IdLessTag[];
+}
 
-  private statusContainer = getElementById("current-status-pill-container", HTMLDivElement);
+class LinkForm {
+  private unsupported = getElementById("current-unsupported", HTMLDivElement);
+  private form = getElementById("current-form", HTMLDivElement);
+  private titleInput = getElementById("current-title", HTMLInputElement);
+  private urlEl = getElementById("current-url", HTMLDivElement);
+  private notes = getElementById("current-notes", HTMLTextAreaElement);
+  private collection = getElementById("current-collection", HTMLSelectElement);
+  private pinBtn = getElementById("btn-pin", HTMLButtonElement);
+
   private statusPill = getElementById("current-status-pill", HTMLSpanElement);
   private recheck = getElementById("current-btn-recheck", HTMLButtonElement);
 
-  private errorContainer = getElementById("current-error-container", HTMLDivElement);
-  private lastArchived = getElementById("current-last-archived", HTMLDivElement);
+  private tagList = getElementById("current-tags", HTMLDivElement);
+  // private tagError = getElementById("current-tags-error", HTMLDivElement);
+  private tagInput = getElementById("current-tag-input", HTMLInputElement);
+  private tagAddBtn = getElementById("current-tag-add", HTMLButtonElement);
+  private tagSuggestions = getElementById("tag-options", HTMLDataListElement);
+  private chipTpl = getElementById("template-tag-chip", HTMLTemplateElement);
+  private emptyTpl = getElementById("template-tags-empty", HTMLTemplateElement);
+
+  private archiveOption = getElementById("archive-option", HTMLLabelElement);
+  private archiveCheck = getElementById("archive-with-save", HTMLInputElement);
+
+  private errorEl = getElementById("current-error-container", HTMLDivElement);
   private flash = getElementById("current-flash", HTMLDivElement);
 
-  private versionItemTpl = getElementById("template-version", HTMLTemplateElement);
-  private versionList = getElementById("current-versions-list", HTMLUListElement);
-  private versionOverflow = getElementById("current-versions-overflow", HTMLDivElement);
-
+  private saveBtn = getElementById("btn-save", HTMLButtonElement);
   private archiveBtn = getElementById("btn-archive", HTMLButtonElement);
   private archiveBtnText = getElementById("btn-archive-text", HTMLSpanElement);
   private archiveBtnShortcut = getElementById("btn-archive-shortcut", HTMLSpanElement);
 
+  private tagStore = new TagStore();
+  /** Server-known tags (name -> color), most used first. */
+  private known = new Map<string, Option<string>>();
+
+  private readonly page: ApiPageDetail | null;
+  private readonly url: string;
+  private pinned: boolean;
+  private initialCollectionId: Option<Int64>;
+  private collectionsLoaded = false;
+  private baseline: Draft;
+  private busy = false;
+
   constructor(
+    private readonly tabId: number,
     tab: chrome.tabs.Tab,
-    state: LookupState,
-    archiveShortcut: string,
-    private readonly getTags: () => readonly IdLessTag[],
+    readonly state: LookupState,
+    shortcut: string,
+    archiveDefault: boolean,
   ) {
-    const archivable = state.kind !== "unavailable";
-    const page = state.kind === "archived" ? state.page : null;
+    this.page = state.kind === "saved" ? state.page : null;
+    this.url = this.page?.url ?? tab.url ?? "";
+    this.pinned = this.page?.pinned ?? false;
+    this.initialCollectionId = this.page?.collectionId ?? null;
 
-    this.renderHeader(tab, page);
+    const usable = state.kind !== "unavailable";
+    show(this.unsupported, !usable);
+    show(this.form, usable);
+    this.errorEl.textContent = state.kind === "unavailable" ? state.detail : "";
+
     this.renderStatus(state);
-    this.renderArchiveButton(archivable, page !== null, archiveShortcut);
-    this.renderLastArchived(page);
-    this.renderVersions(state);
 
-    show(this.unarchivable, !archivable);
-    show(this.meta, archivable);
-    // textContent, not innerHTML: error details are not trusted HTML
-    this.errorContainer.textContent = state.kind === "unavailable" ? state.detail : "";
+    this.titleInput.value = this.page?.displayTitle || tab.title || "";
+    setTextWithTitle(this.urlEl, this.url || "No URL");
+    this.notes.value = this.page?.description ?? "";
+    if (this.page) this.tagStore.tags = this.page.tags;
+    this.archiveCheck.checked = archiveDefault;
+    this.archiveBtnShortcut.textContent = shortcut;
 
-    if (archivable && tab.id !== undefined) this.bindActions(tab.id);
+    this.renderPin();
+    this.renderChips();
+    this.renderButtons();
+    this.baseline = this.draft();
+    this.updateSaveState();
+
+    const savedFlash = sessionStorage.getItem(FLASH_KEY);
+    if (savedFlash) {
+      sessionStorage.removeItem(FLASH_KEY);
+      this.showFlash(savedFlash);
+    }
+
+    if (usable) this.bind();
   }
 
-  private bindActions(tabId: number) {
+  // ----- wiring ------------------------------------------------------------
+
+  private bind() {
     this.recheck.addEventListener("click", () => location.reload());
 
-    this.archiveBtn.addEventListener("click", async () => {
-      let flashText = "Archiving...";
+    for (const el of [this.titleInput, this.notes]) {
+      el.addEventListener("input", () => this.updateSaveState());
+    }
+    this.collection.addEventListener("change", () => this.updateSaveState());
 
-      this.flash.textContent = flashText;
-      this.archiveBtn.disabled = true;
-      show(this.errorContainer, false);
-      show(this.flash, true);
-
-      // Read at click time so tags edited just before archiving are included.
-      const [archive, error] = await sendToBackground("ARCHIVE_TAB", {
-        tabId,
-        tags: [...this.getTags()],
-      });
-
-      if (error) {
-        ErrorUi.push("Cannot archive page,", error.detail);
-        this.errorContainer.textContent = `Couldn't archive: ${error.detail}`;
-        show(this.errorContainer, true);
-        this.archiveBtn.disabled = false;
-        return;
-      }
-
-      const { warnings } = archive;
-      flashText =
-        "Archived ✓" +
-        (warnings.length
-          ? ` (${warnings.length} warning${warnings.length > 1 ? "s" : ""}: ${warnings.join("; ")})`
-          : "");
-
-      // Flash Message
-      this.flash.textContent = flashText;
-
-      location.reload(); // re-lookup to show the new version
+    this.pinBtn.addEventListener("click", () => {
+      this.pinned = !this.pinned;
+      this.renderPin();
+      this.updateSaveState();
     });
+
+    this.tagAddBtn.addEventListener("click", () => this.addTags(this.tagInput.value));
+    this.tagInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.isComposing) {
+        e.preventDefault();
+        this.addTags(this.tagInput.value);
+      }
+    });
+
+    this.archiveCheck.addEventListener("change", () => writeArchivePref(this.archiveCheck.checked));
+
+    this.saveBtn.addEventListener("click", () => void this.save());
+    this.archiveBtn.addEventListener("click", () => void this.archiveVersion());
+
+    // Ctrl/Cmd+Enter saves from the free-text fields.
+    const submitShortcut = (e: KeyboardEvent) => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.isComposing) {
+        e.preventDefault();
+        void this.save();
+      }
+    };
+    this.titleInput.addEventListener("keydown", submitShortcut);
+    this.notes.addEventListener("keydown", submitShortcut);
   }
 
-  private renderHeader(tab: chrome.tabs.Tab, page: ApiPageDetail | null) {
-    setTextWithTitle(this.title, page?.title || page?.url || tab.title || tab.url || "No Title");
-    setTextWithTitle(this.url, page?.url || tab.url || "No Url");
+  // ----- data loading ------------------------------------------------------
+
+  /** Not-yet-saved pages may already have tags chosen via the queue. */
+  async loadLocalTags() {
+    const [tags, error] = await sendToBackground("GET_LOCAL_TAGS", { url: this.url });
+    if (error) {
+      ErrorUi.push("Cannot load local tags,", error.detail);
+      return;
+    }
+    this.tagStore.tags = tags;
+    this.baseline = { ...this.baseline, tags: this.draft().tags };
+    this.renderChips();
+    this.updateSaveState();
   }
 
-  private renderStatus(state: LookupState) {
-    const unavailable = state.kind === "unavailable";
-    show(this.statusContainer, !unavailable);
-    show(this.recheck, !unavailable);
-    this.recheck.disabled = unavailable;
+  /** Best-effort: without collections the link stays Unsorted. */
+  async loadCollections() {
+    const [collections, error] = await sendToBackground("LIST_COLLECTIONS");
+    if (error) {
+      log.warn("Cannot load collections,", error.detail);
+      this.collection.disabled = this.page !== null; // can't safely edit an existing assignment
+      return;
+    }
 
-    if (state.kind === "archived") {
-      this.statusPill.className = "pill ok";
-      this.statusPill.textContent = `Archived · ${plural(state.page.captureCount, "version")}`;
-    } else if (state.kind === "not_archived") {
-      this.statusPill.className = "pill warn";
-      this.statusPill.textContent = "Not archived";
+    const options = collections.map((c: ApiCollection) => {
+      const option = document.createElement("option");
+      option.value = String(c.id);
+      option.textContent = `${c.emoji} ${c.name}`;
+      return option;
+    });
+    this.collection.append(...options);
+    this.collectionsLoaded = true;
+    this.collection.value =
+      this.initialCollectionId === null ? "" : String(this.initialCollectionId);
+    this.updateSaveState();
+  }
+
+  /** Best-effort: a failure only means no autocomplete. */
+  async loadSuggestions() {
+    const [tags, error] = await sendToBackground("LIST_TAGS");
+    if (error) {
+      log.warn("Cannot load tag suggestions,", error.detail);
+      return;
+    }
+    const byUsage = [...tags].sort((a, b) => b.pages - a.pages);
+    this.known = new Map(byUsage.map((t) => [t.name, t.color]));
+    this.renderSuggestions();
+  }
+
+  // ----- draft & dirty tracking ---------------------------------------------
+
+  private draft(): Draft {
+    let collectionId = this.initialCollectionId;
+    if (this.collectionsLoaded) {
+      collectionId = this.collection.value === "" ? null : (Number(this.collection.value) as Int64);
+    }
+    return {
+      title: this.titleInput.value.trim(),
+      description: this.notes.value.trim(),
+      collectionId,
+      pinned: this.pinned,
+      tags: this.tagStore.tags.map(({ name, color }) => ({ name, color })),
+    };
+  }
+
+  /** Only the page fields that differ from the baseline (sent as PATCH body). */
+  private patch(draft: Draft) {
+    const patch: {
+      title?: string;
+      description?: string;
+      collectionId?: Option<Int64>;
+      pinned?: boolean;
+    } = {};
+    if (draft.title !== this.baseline.title) patch.title = draft.title;
+    if (draft.description !== this.baseline.description) patch.description = draft.description;
+    if (draft.collectionId !== this.baseline.collectionId) patch.collectionId = draft.collectionId;
+    if (draft.pinned !== this.baseline.pinned) patch.pinned = draft.pinned;
+    return patch;
+  }
+
+  private tagsChanged(draft: Draft): boolean {
+    return tagsKey(draft.tags) !== tagsKey(this.baseline.tags);
+  }
+
+  private updateSaveState() {
+    const draft = this.draft();
+    const dirty =
+      this.page === null || Object.keys(this.patch(draft)).length > 0 || this.tagsChanged(draft);
+    this.saveBtn.disabled = this.busy || !dirty;
+  }
+
+  // ----- actions -------------------------------------------------------------
+
+  private async save() {
+    if (this.busy || this.saveBtn.disabled) return;
+    const draft = this.draft();
+
+    this.setBusy(true);
+    this.clearMessages();
+    this.showFlash("Saving…");
+
+    try {
+      if (this.page === null) await this.saveNew(draft);
+      else await this.saveExisting(this.page, draft);
+    } finally {
+      this.setBusy(false);
     }
   }
 
-  private renderArchiveButton(archivable: boolean, isArchived: boolean, shortcut: string) {
-    this.archiveBtn.disabled = !archivable;
-    this.archiveBtnText.textContent = isArchived ? "Archive new version" : "Archive this page";
-    this.archiveBtnShortcut.textContent = shortcut;
+  private async saveNew(draft: Draft) {
+    const [result, error] = await sendToBackground("SAVE_LINK", {
+      tabId: this.tabId,
+      title: draft.title || undefined,
+      description: draft.description || undefined,
+      collectionId: draft.collectionId,
+      pinned: draft.pinned,
+      tags: draft.tags,
+      archive: this.archiveCheck.checked,
+    });
+
+    if (error) return this.fail(`Couldn't save link: ${error.detail}`);
+    this.reloadWithFlash(result.archived ? "Saved and archived ✓" : "Saved ✓", result.warnings);
   }
 
-  private renderLastArchived(page: ApiPageDetail | null) {
-    const ts = page?.lastCapturedAt;
+  private async saveExisting(page: ApiPageDetail, draft: Draft) {
+    const patch = this.patch(draft);
+
+    if (Object.keys(patch).length > 0) {
+      const [, error] = await sendToBackground("UPDATE_PAGE", { id: page.id, patch });
+      if (error) return this.fail(`Couldn't save changes: ${error.detail}`);
+    }
+
+    if (this.tagsChanged(draft)) {
+      const [saved, error] = await sendToBackground("SET_PAGE_TAGS", {
+        idOrUrl: page.id,
+        url: this.url,
+        tags: draft.tags,
+      });
+      if (error) {
+        // Page fields were already saved; keep their baseline so only tags stay dirty.
+        this.baseline = { ...draft, tags: this.baseline.tags };
+        return this.fail(`Saved, but couldn't update tags: ${error.detail}`);
+      }
+      this.tagStore.tags = saved;
+      for (const t of saved) if (!this.known.has(t.name)) this.known.set(t.name, t.color);
+      this.renderChips();
+      this.renderSuggestions();
+    }
+
+    this.baseline = this.draft();
+    this.showFlash("Saved ✓");
+  }
+
+  private async archiveVersion() {
+    if (this.busy) return;
+    this.setBusy(true);
+    this.clearMessages();
+    this.showFlash("Archiving…");
+
+    try {
+      const [archive, error] = await sendToBackground("ARCHIVE_TAB", {
+        tabId: this.tabId,
+        tags: this.draft().tags,
+      });
+      if (error) return this.fail(`Couldn't archive: ${error.detail}`);
+      this.reloadWithFlash("Archived ✓", archive.warnings);
+    } finally {
+      this.setBusy(false);
+    }
+  }
+
+  // ----- feedback ------------------------------------------------------------
+
+  private fail(message: string) {
+    log.error(message);
+    show(this.flash, false);
+    this.errorEl.textContent = message;
+    show(this.errorEl, true);
+  }
+
+  private clearMessages() {
+    this.errorEl.textContent = "";
+    show(this.errorEl, false);
+    show(this.flash, false);
+  }
+
+  private showFlash(text: string) {
+    this.flash.textContent = text;
+    show(this.flash, true);
+  }
+
+  /** Re-lookup after the page's saved/archived state changed; the flash survives the reload. */
+  private reloadWithFlash(text: string, warnings: readonly string[]) {
+    const suffix = warnings.length
+      ? ` (${plural(warnings.length, "warning")}: ${warnings.join("; ")})`
+      : "";
+    sessionStorage.setItem(FLASH_KEY, text + suffix);
+    location.reload();
+  }
+
+  private setBusy(busy: boolean) {
+    this.busy = busy;
+    for (const el of [
+      this.titleInput,
+      this.notes,
+      this.collection,
+      this.pinBtn,
+      this.tagInput,
+      this.tagAddBtn,
+      this.archiveCheck,
+      this.archiveBtn,
+    ]) {
+      el.disabled = busy;
+    }
+    this.renderChips(); // refreshes the chips' disabled state
+    this.updateSaveState();
+  }
+
+  // ----- rendering -------------------------------------------------------------
+
+  private renderStatus(state: LookupState) {
+    show(this.statusPill, state.kind !== "unavailable");
+    show(this.recheck, state.kind !== "unavailable");
+
+    if (state.kind === "saved") {
+      const n = state.page.captureCount;
+      this.statusPill.className = "pill ok";
+      this.statusPill.textContent = n > 0 ? `Saved · ${plural(n, "snapshot")}` : "Saved";
+    } else if (state.kind === "not_saved") {
+      this.statusPill.className = "pill warn";
+      this.statusPill.textContent = "Not saved";
+    }
+  }
+
+  private renderButtons() {
+    const saved = this.page !== null;
+    this.saveBtn.textContent = saved ? "Save changes" : "Save link";
+    show(this.archiveOption, !saved);
+    show(this.archiveBtn, saved);
+    this.archiveBtnText.textContent =
+      saved && this.page!.captureCount === 0 ? "Archive a snapshot" : "Archive new version";
+  }
+
+  private renderPin() {
+    this.pinBtn.setAttribute("aria-pressed", String(this.pinned));
+    this.pinBtn.title = this.pinned ? "Unpin this link" : "Pin this link";
+    this.pinBtn.setAttribute("aria-label", this.pinBtn.title);
+  }
+
+  // ----- tags --------------------------------------------------------------------
+
+  private addTags(raw: string) {
+    const added = raw
+      .split(",")
+      .map(parseTagInput)
+      .filter((t): t is IdLessTag => t !== null);
+    if (added.length === 0) return;
+
+    for (const parsed of added) {
+      this.tagStore.upsertTag({
+        ...parsed,
+        color: parsed.color ?? this.known.get(parsed.name) ?? null,
+      });
+    }
+    this.tagInput.value = "";
+    this.tagInput.focus();
+    this.renderChips();
+    this.renderSuggestions();
+    this.updateSaveState();
+  }
+
+  private removeTag(name: string) {
+    this.tagStore.removeTag(name);
+    this.renderChips();
+    this.renderSuggestions();
+    this.updateSaveState();
+  }
+
+  private renderSuggestions() {
+    const applied = new Set(this.tagStore.tags.map((t) => t.name));
+    const options: HTMLOptionElement[] = [];
+    for (const name of this.known.keys()) {
+      if (applied.has(name)) continue;
+      const option = document.createElement("option");
+      option.value = name;
+      options.push(option);
+    }
+    this.tagSuggestions.replaceChildren(...options);
+  }
+
+  private renderChips() {
+    if (this.tagStore.length === 0) {
+      this.tagList.replaceChildren(this.emptyTpl.content.cloneNode(true));
+      return;
+    }
+
+    const frag = document.createDocumentFragment();
+    for (const t of this.tagStore.tags) frag.appendChild(this.renderChip(t.name));
+    this.tagList.replaceChildren(frag);
+  }
+
+  private renderChip(name: string): HTMLElement {
+    const frag = this.chipTpl.content.cloneNode(true) as DocumentFragment;
+    const chip = q<HTMLElement>(frag, ".tag-chip");
+    const nameEl = q<HTMLSpanElement>(frag, ".tag-chip-name");
+    const removeBtn = q<HTMLButtonElement>(frag, ".tag-chip-remove");
+
+    nameEl.textContent = name;
+    removeBtn.title = `Remove tag "${name}"`;
+    removeBtn.setAttribute("aria-label", removeBtn.title);
+    removeBtn.disabled = this.busy;
+    removeBtn.addEventListener("click", () => this.removeTag(name));
+
+    return chip;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Snapshots (collapsed list of saved versions)
+// ---------------------------------------------------------------------------
+
+class Snapshots {
+  private root = getElementById("snapshots", HTMLDetailsElement);
+  private summary = getElementById("snapshots-summary", HTMLElement);
+  private lastArchived = getElementById("current-last-archived", HTMLDivElement);
+  private list = getElementById("current-versions-list", HTMLUListElement);
+  private overflow = getElementById("current-versions-overflow", HTMLDivElement);
+  private itemTpl = getElementById("template-version", HTMLTemplateElement);
+
+  constructor(state: LookupState) {
+    const visible = state.kind === "saved" && state.page.captureCount > 0;
+    show(this.root, visible);
+    if (state.kind !== "saved" || !visible) return;
+
+    const { page, versions } = state;
+    this.summary.textContent = `Snapshots (${page.captureCount})`;
+
+    const ts = page.lastCapturedAt;
     show(this.lastArchived, !!ts);
     if (ts) {
       this.lastArchived.textContent = `Last archived ${formatTimeFromSec(ts)} (${timeAgoFromSec(ts)})`;
     }
-  }
-
-  private renderVersions(state: LookupState) {
-    this.versionList.replaceChildren();
-
-    if (state.kind !== "archived") {
-      show(this.versionList, false);
-      show(this.versionOverflow, false);
-      return;
-    }
-
-    show(this.versionList, true);
 
     // Assumes the API returns versions newest-first.
-    const shown = state.versions.items.slice(0, MAX_VERSIONS_SHOWN);
-
-    // captureCount is the real total; items may be paginated.
-    const total = state.page.captureCount;
-    const overflow = total > shown.length;
-    show(this.versionOverflow, overflow);
-    if (overflow) {
-      this.versionOverflow.textContent = `Showing newest ${shown.length} of ${total}`;
-    }
+    const shown = versions.items.slice(0, MAX_VERSIONS_SHOWN);
+    const hasMore = page.captureCount > shown.length;
+    show(this.overflow, hasMore);
+    if (hasMore)
+      this.overflow.textContent = `Showing newest ${shown.length} of ${page.captureCount}`;
 
     const frag = document.createDocumentFragment();
     for (const version of shown) frag.appendChild(this.renderVersion(version));
-    this.versionList.appendChild(frag);
+    this.list.replaceChildren(frag);
   }
 
   private renderVersion(version: ApiCaptureSummary): HTMLLIElement {
-    const frag = this.versionItemTpl.content.cloneNode(true) as DocumentFragment;
+    const frag = this.itemTpl.content.cloneNode(true) as DocumentFragment;
     const li = q<HTMLLIElement>(frag, "li");
     const link = q<HTMLAnchorElement>(frag, ".ver-link");
     const timeEl = q<HTMLTimeElement>(frag, ".ver-time");
@@ -312,7 +691,6 @@ class CurrentPage {
         openTab(href);
       });
     } else {
-      // No href → styled as a non-link via :not([href])
       link.removeAttribute("href");
       link.setAttribute("aria-disabled", "true");
     }
@@ -330,11 +708,11 @@ class CurrentPage {
 }
 
 // ---------------------------------------------------------------------------
-// Pending list
+// Queue (collapsed list of pending items)
 // ---------------------------------------------------------------------------
 
 class Pending {
-  private heading = getElementById("pending-heading", HTMLHeadingElement);
+  private summary = getElementById("pending-heading", HTMLElement);
   private fetchedTime = getElementById("pending-fetched-time", HTMLSpanElement);
   private btnRefresh = getElementById("btn-refresh-pending", HTMLButtonElement);
   private refreshIcon = getElementById("refresh-icon", HTMLSpanElement);
@@ -353,11 +731,11 @@ class Pending {
   }
 
   async refresh() {
-    log.debug("Refreshing pending list");
+    log.debug("Refreshing queue");
     this.setRefreshing(true);
     try {
       const [, refreshError] = await sendToBackground("REFRESH_PENDING");
-      if (refreshError) ErrorUi.push("Cannot refresh pending,", refreshError.detail);
+      if (refreshError) ErrorUi.push("Cannot refresh queue,", refreshError.detail);
       // Render regardless: GET_PENDING reports the stored error state too.
       this.render(await sendToBackground("GET_PENDING"));
     } finally {
@@ -374,8 +752,8 @@ class Pending {
     if (error) {
       // Don't shout on first run; refresh() is already running.
       if (error.reason !== "pending_not_fetched") {
-        ErrorUi.push("Cannot get pending,", error.detail);
-        this.errorContainer.textContent = `Couldn't load pending list: ${error.detail}`;
+        ErrorUi.push("Cannot get queue,", error.detail);
+        this.errorContainer.textContent = `Couldn't load queue: ${error.detail}`;
       }
       show(this.fetchedTime, false);
       return;
@@ -384,8 +762,8 @@ class Pending {
     // Last refresh failed, but we still have the previous list to show.
     this.errorContainer.textContent = pending.error ? `Last refresh failed: ${pending.error}` : "";
 
-    this.heading.textContent = `Pending(${pending.total}${pending.hasMore ? "+" : ""})`;
-    this.fetchedTime.textContent = timeAgoFromSec(pending.fetchedAt);
+    this.summary.textContent = `Queue (${pending.total}${pending.hasMore ? "+" : ""})`;
+    this.fetchedTime.textContent = `Updated ${timeAgoFromSec(pending.fetchedAt)}`;
     this.fetchedTime.title = formatTimeFromSec(pending.fetchedAt);
     show(this.fetchedTime, true);
 
@@ -397,7 +775,7 @@ class Pending {
 
     show(this.overflow, pending.hasMore);
     if (pending.hasMore) {
-      this.overflow.textContent = "More pending items not shown (see list limit in preferences)";
+      this.overflow.textContent = "More queued items not shown (see list limit in preferences)";
     }
   }
 
@@ -405,20 +783,19 @@ class Pending {
     const clone = this.itemTemplate.content.cloneNode(true) as DocumentFragment;
     const titleEl = q<HTMLDivElement>(clone, ".title");
     const urlEl = q<HTMLDivElement>(clone, ".url");
-    const tagsEl = q<HTMLDivElement>(clone, ".small.muted");
+    const tagsEl = q<HTMLDivElement>(clone, ".tags-line");
     const tagsBtn = q<HTMLButtonElement>(clone, ".tags-btn");
-    const actionBtn = q<HTMLButtonElement>(clone, ".sm.archive-btn");
+    const actionBtn = q<HTMLButtonElement>(clone, ".archive-btn");
     const editor = q<HTMLDivElement>(clone, ".pending-tag-editor");
     const input = q<HTMLInputElement>(clone, ".pending-tag-input");
     const saveBtn = q<HTMLButtonElement>(clone, ".pending-tag-save");
     const cancelBtn = q<HTMLButtonElement>(clone, ".pending-tag-cancel");
     const errorEl = q<HTMLDivElement>(clone, ".pending-tag-error");
 
-    titleEl.title = item.title || item.url;
-    titleEl.textContent = item.title || displayUrl(item.url);
-
+    // Queue items have no title yet; show host + path instead.
+    setTextWithTitle(titleEl, displayUrl(item.url));
     urlEl.title = item.url;
-    urlEl.textContent = `${item.url} · ${timeAgoFromSec(item.createdAt)}`;
+    urlEl.textContent = `Queued ${timeAgoFromSec(item.createdAt)}`;
 
     const renderTags = () => {
       const tagNames = item.tags.map((t) => t.name);
@@ -427,7 +804,7 @@ class Pending {
     renderTags();
 
     actionBtn.addEventListener("click", async () => {
-      log.debug("Pending list archive requested", { url: item.url });
+      log.debug("Queue archive requested", { url: item.url });
       await sendToBackground("OPEN_AND_ARCHIVE", { url: item.url });
       window.close();
     });
@@ -459,10 +836,7 @@ class Pending {
         .map(parseTagInput)
         .filter((tag): tag is IdLessTag => tag !== null);
 
-      const [saved, error] = await sendToBackground("SET_PENDING_TAGS", {
-        id: item.id,
-        tags,
-      });
+      const [saved, error] = await sendToBackground("SET_PENDING_TAGS", { id: item.id, tags });
 
       saveBtn.disabled = false;
       input.disabled = false;
@@ -487,197 +861,6 @@ class Pending {
     });
 
     return clone;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Tags
-// ---------------------------------------------------------------------------
-
-/** Parses "name" or "name:color" into a tag. Returns null for an empty name. */
-function parseTagInput(raw: string): IdLessTag | null {
-  const sep = raw.indexOf(":");
-  const name = (sep === -1 ? raw : raw.slice(0, sep)).trim();
-  if (!name) return null;
-  const color = sep === -1 ? null : raw.slice(sep + 1).trim() || null;
-  return { name, color };
-}
-
-class Tag {
-  private list = getElementById("current-tags", HTMLDivElement);
-  private errorEl = getElementById("current-tags-error", HTMLDivElement);
-  private input = getElementById("current-tag-input", HTMLInputElement);
-  private btnAddTag = getElementById("current-tag-add", HTMLButtonElement);
-
-  private chipTpl = getElementById("template-tag-chip", HTMLTemplateElement);
-  private emptyTpl = getElementById("template-tags-empty", HTMLTemplateElement);
-
-  // fields
-  private suggestions = getElementById("tag-options", HTMLDataListElement);
-  /** Server-known tags (name -> color), most used first. */
-  private known = new Map<string, Option<string>>();
-
-  private tagStore = new TagStore();
-  private pageId: Int64 | null = null;
-  private busy = false;
-
-  constructor(
-    private readonly url: string,
-    state: LookupState,
-  ) {
-    if (state.kind === "archived") {
-      this.tagStore.tags = state.page.tags;
-      this.pageId = state.page.id;
-    }
-
-    this.renderChips();
-
-    if (state.kind === "unavailable") {
-      // Can't save tags without a usable lookup; leave the UI inert.
-      this.input.disabled = true;
-      this.btnAddTag.disabled = true;
-      return;
-    }
-
-    this.btnAddTag.addEventListener("click", () => void this.add(this.input.value));
-    this.input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.isComposing) {
-        e.preventDefault();
-        void this.add(this.input.value);
-      }
-    });
-  }
-
-  async loadLocalTags() {
-    const [tags, error] = await sendToBackground("GET_LOCAL_TAGS", { url: this.url });
-    if (error) {
-      ErrorUi.push("Cannot load local tags,", error.detail);
-      return;
-    }
-    this.tagStore.tags = tags;
-    this.renderChips();
-  }
-
-  /** Best-effort: a failure only means no autocomplete, so it is logged, not shown. */
-  async loadSuggestions() {
-    const [tags, error] = await sendToBackground("LIST_TAGS");
-    if (error) {
-      log.warn("Cannot load tag suggestions,", error.detail);
-      return;
-    }
-
-    const byUsage = [...tags].sort((a, b) => b.pages - a.pages);
-    this.known = new Map(byUsage.map((t) => [t.name, t.color]));
-    this.renderSuggestions();
-  }
-
-  private renderSuggestions() {
-    const applied = new Set(this.tagStore.tags.map((t) => t.name));
-    const options: HTMLOptionElement[] = [];
-
-    for (const name of this.known.keys()) {
-      if (applied.has(name)) continue;
-      const option = document.createElement("option");
-      option.value = name;
-      options.push(option);
-    }
-    this.suggestions.replaceChildren(...options);
-  }
-
-  get currentTags(): IdLessTag[] {
-    return this.tagStore.tags; // already a copy
-  }
-
-  async add(raw: string): Promise<boolean> {
-    const parsed = parseTagInput(raw);
-    if (!parsed) return false;
-
-    const tag: IdLessTag = {
-      ...parsed,
-      color: parsed.color ?? this.known.get(parsed.name) ?? null,
-    };
-
-    const next = new TagStore(this.tagStore.tags);
-    next.upsertTag(tag);
-
-    const ok = await this.commit(next.tags);
-    if (ok) {
-      this.input.value = "";
-      this.input.focus();
-    }
-    return ok;
-  }
-
-  async remove(name: string): Promise<boolean> {
-    const next = new TagStore(this.tagStore.tags);
-    next.removeTag(name);
-    return this.commit(next.tags);
-  }
-
-  /** Persists `next`; the store only changes on success so the UI never drifts from the server. */
-  private async commit(next: readonly IdLessTag[]): Promise<boolean> {
-    if (this.busy) return false;
-    this.showError(null);
-    this.setBusy(true);
-
-    try {
-      const [saved, error] = await sendToBackground("SET_PAGE_TAGS", {
-        idOrUrl: this.pageId ?? this.url,
-        tags: [...next],
-        url: this.url,
-      });
-
-      if (error) {
-        log.error("Cannot save tags,", error.detail);
-        this.showError("Couldn't save tags. Please try again.");
-        return false;
-      }
-
-      this.tagStore.tags = saved;
-      for (const t of saved) if (!this.known.has(t.name)) this.known.set(t.name, t.color);
-      this.renderSuggestions();
-      return true;
-    } finally {
-      this.setBusy(false);
-    }
-  }
-
-  private setBusy(busy: boolean) {
-    this.busy = busy;
-    this.btnAddTag.disabled = busy;
-    this.input.disabled = busy;
-    this.renderChips(); // refresh the chips' disabled state
-  }
-
-  private showError(message: string | null) {
-    this.errorEl.textContent = message ?? "";
-    show(this.errorEl, message !== null);
-  }
-
-  private renderChips() {
-    if (this.tagStore.length === 0) {
-      this.list.replaceChildren(this.emptyTpl.content.cloneNode(true));
-      return;
-    }
-
-    const frag = document.createDocumentFragment();
-    for (const t of this.tagStore.tags) frag.appendChild(this.renderChip(t.name));
-    this.list.replaceChildren(frag);
-  }
-
-  private renderChip(name: string): HTMLElement {
-    const frag = this.chipTpl.content.cloneNode(true) as DocumentFragment;
-    const chip = q<HTMLElement>(frag, ".tag-chip");
-    const nameEl = q<HTMLSpanElement>(frag, ".tag-chip-name");
-    const removeBtn = q<HTMLButtonElement>(frag, ".tag-chip-remove");
-
-    nameEl.textContent = name;
-    removeBtn.title = `Remove tag "${name}" from this site`;
-    removeBtn.setAttribute("aria-label", removeBtn.title);
-    removeBtn.disabled = this.busy;
-    removeBtn.addEventListener("click", () => void this.remove(name));
-
-    return chip;
   }
 }
 
@@ -732,11 +915,13 @@ async function init() {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
   log.debug("Popup opened", { tabId: tab?.id, url: tab?.url, title: tab?.title });
 
-  const [hasPermission, shortcut, [storageSettings, settingsError]] = await Promise.all([
-    hasAllUrlsPermission(),
-    getArchiveShortcut(),
-    sendToBackground("GET_EXTENSION_SETTINGS"),
-  ]);
+  const [hasPermission, shortcut, archiveDefault, [storageSettings, settingsError]] =
+    await Promise.all([
+      hasAllUrlsPermission(),
+      getArchiveShortcut(),
+      readArchivePref(),
+      sendToBackground("GET_EXTENSION_SETTINGS"),
+    ]);
 
   if (settingsError) {
     ErrorUi.push("Cannot load extension settings,", settingsError.detail);
@@ -768,12 +953,13 @@ async function init() {
 
   const state = toLookupState(lookupResult);
 
-  const tagUi = tab.url ? new Tag(tab.url, state) : null;
-  if (tagUi && state.kind === "not_archived") await tagUi.loadLocalTags();
-  if (tagUi && configured) void tagUi.loadSuggestions();
-
-  new CurrentPage(tab, state, shortcut, () => tagUi?.currentTags ?? []);
+  const form = new LinkForm(tab.id, tab, state, shortcut, archiveDefault);
+  new Snapshots(state);
   new Pending(pendingResult);
+
+  if (state.kind === "not_saved") await form.loadLocalTags();
+  if (state.kind !== "unavailable") void form.loadCollections();
+  if (configured) void form.loadSuggestions();
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
