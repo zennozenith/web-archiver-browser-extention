@@ -40,7 +40,15 @@ export interface MessageMap {
     data: SetPageTag;
   };
   GET_LOCAL_TAGS: { payload: { url: string }; data: GetLocalPageTags };
-  ARCHIVE_TAB: { payload: { tabId: Int; tags?: Vec<IdLessTag> }; data: ArchiveTab };
+  ARCHIVE_TAB: {
+    payload: {
+      tabId: Int;
+      tags?: Vec<IdLessTag>;
+      archiveSnapshot?: boolean;
+      saveAssets?: boolean;
+    };
+    data: ArchiveTab;
+  };
   LIST_TAGS: { payload: undefined; data: ListTags };
   LIST_COLLECTIONS: { payload: undefined; data: ListCollections };
   UPDATE_PAGE: { payload: { id: Int64; patch: PatchPageRequest }; data: UpdatePage };
@@ -50,7 +58,12 @@ export interface MessageMap {
     data: Result<boolean>;
   };
   ARCHIVE_FROM_PAGE: {
-    payload: { tags: Vec<IdLessTag> };
+    payload: {
+      tags: Vec<IdLessTag>;
+      archiveSnapshot?: boolean;
+      saveAssets?: boolean;
+      pendingId?: Int64;
+    };
     data: ArchiveTab | Fail<{ reason: "no_tab_id"; detail: string }>;
   };
 }

@@ -34,6 +34,7 @@ const inputAuthToken = elFromDataKey<HTMLInputElement>("auth-token");
 const inputIncludeScreenshot = elFromDataKey<HTMLInputElement>("include-screenshot");
 const selectScreenshotFormat = elFromDataKey<HTMLSelectElement>("screenshot-format");
 const inputJpegQuality = elFromDataKey<HTMLInputElement>("jpeg-quality");
+const archiveSnapshot = elFromDataKey<HTMLInputElement>("archive-snapshot");
 const saveAssets = elFromDataKey<HTMLInputElement>("save-assets");
 const inputFullPageScreenshot = elFromDataKey<HTMLInputElement>("full-page-screenshot");
 const inputIncludeRequestHeaders = elFromDataKey<HTMLInputElement>("include-request-headers");
@@ -42,6 +43,7 @@ const inputIncludeSensitiveHeaders = elFromDataKey<HTMLInputElement>("include-se
 const inputSensitiveHeaders = elFromDataKey<HTMLInputElement>("sensitive-headers");
 const inputRequestTimeoutSec = elFromDataKey<HTMLInputElement>("request-timeout-sec");
 const inputAutoCheck = elFromDataKey<HTMLInputElement>("auto-check");
+const inputPromptPendingOnLoad = elFromDataKey<HTMLInputElement>("prompt-pending-on-load");
 const inputPendingRefreshMinutes = elFromDataKey<HTMLInputElement>("pending-refresh-minutes");
 const inputPendingLimit = elFromDataKey<HTMLInputElement>("pending-limit");
 const selectDirectArchiveMode = elFromDataKey<HTMLSelectElement>("direct-archive-mode");
@@ -113,13 +115,15 @@ function readForm() {
     includeScreenshot: inputIncludeScreenshot.checked,
     screenshotFormat: selectScreenshotFormat.value as ExtensionSettings["screenshotFormat"],
     jpegQuality: Number(inputJpegQuality.value),
-    saveAssets: saveAssets.checked,
+    archiveSnapshotWhenShortcut: archiveSnapshot.checked,
+    saveAssetsWhenShortcut: saveAssets.checked,
     fullPageScreenshot: inputFullPageScreenshot.checked,
     includeRequestHeaders: inputIncludeRequestHeaders.checked,
     includeResponseHeaders: inputIncludeResponseHeaders.checked,
     includeSensitiveHeaders: inputIncludeSensitiveHeaders.checked,
     requestTimeoutSec: Number(inputRequestTimeoutSec.value),
     autoCheck: inputAutoCheck.checked,
+    promptPendingOnLoad: inputPromptPendingOnLoad.checked,
     pendingRefreshMinutes: Number(inputPendingRefreshMinutes.value),
     pendingLimit: Number(inputPendingLimit.value),
     directArchiveMode: selectDirectArchiveMode.value as ExtensionSettings["directArchiveMode"],
@@ -141,7 +145,8 @@ function fillForm(extensionSettings: ExtensionSettings): void {
   inputIncludeScreenshot.checked = extensionSettings.includeScreenshot;
   selectScreenshotFormat.value = extensionSettings.screenshotFormat;
   inputJpegQuality.value = String(extensionSettings.jpegQuality);
-  saveAssets.checked = extensionSettings.saveAssets;
+  archiveSnapshot.checked = extensionSettings.archiveSnapshotWhenShortcut;
+  saveAssets.checked = extensionSettings.saveAssetsWhenShortcut;
   inputFullPageScreenshot.checked = extensionSettings.fullPageScreenshot;
   inputIncludeRequestHeaders.checked = extensionSettings.includeRequestHeaders;
   inputIncludeResponseHeaders.checked = extensionSettings.includeResponseHeaders;
@@ -150,6 +155,7 @@ function fillForm(extensionSettings: ExtensionSettings): void {
   inputDefaultTags.value = extensionSettings.defaultTags.map(formatTag).join(", ");
   inputRequestTimeoutSec.value = String(extensionSettings.requestTimeoutSec);
   inputAutoCheck.checked = extensionSettings.autoCheck;
+  inputPromptPendingOnLoad.checked = extensionSettings.promptPendingOnLoad;
   inputPendingRefreshMinutes.value = String(extensionSettings.pendingRefreshMinutes);
   inputPendingLimit.value = String(extensionSettings.pendingLimit);
   selectDirectArchiveMode.value = extensionSettings.directArchiveMode;

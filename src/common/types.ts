@@ -11,7 +11,7 @@ export interface NonEmptyVec<T> extends Vec<T> {
 }
 
 export interface ReqeustOptions {
-  method?: "GET" | "POST" | "PUT" | "PATCH";
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: BodyInit;
   headers?: Record<string, string>;
   token?: string;

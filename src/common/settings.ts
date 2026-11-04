@@ -14,7 +14,10 @@ export interface ExtensionSettings {
   directArchiveDelaySec: Int;
   directArchiveMode: "prompt" | "auto";
   fullPageScreenshot: boolean; // Firefox only
-  saveAssets: boolean;
+  archiveSnapshotWhenShortcut: boolean;
+  saveAssetsWhenShortcut: boolean;
+  /** Offer a direct-archive prompt when a loaded page is already in the queue. */
+  promptPendingOnLoad: boolean;
   includeRequestHeaders: boolean;
   includeResponseHeaders: boolean;
   includeScreenshot: boolean;
@@ -51,7 +54,9 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   autoCheck: true,
   directArchiveDelaySec: 2,
   directArchiveMode: "prompt", // prompt | auto
-  saveAssets: false,
+  archiveSnapshotWhenShortcut: true,
+  saveAssetsWhenShortcut: false,
+  promptPendingOnLoad: true,
   fullPageScreenshot: false, // Firefox only
   includeRequestHeaders: true,
   includeResponseHeaders: true,

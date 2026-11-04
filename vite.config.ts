@@ -16,7 +16,7 @@ export default defineConfig({
     options: { typeAware: true, typeCheck: true },
   },
   fmt: {
-    ignorePatterns: [],
+    ignorePatterns: ["**/*.html"],
   },
   plugins: lazyPlugins(() => [crx({ manifest })]),
   build: {

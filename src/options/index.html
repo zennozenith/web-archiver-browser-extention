@@ -1,5 +1,4 @@
 <!doctype html>
-
 <html>
 
 <head>
@@ -41,7 +40,11 @@
 
       <fieldset>
         <legend>Capture</legend>
-        <label class="chk"><input data-key="save-assets" type="checkbox" checked /> Save Assets
+        <label class="chk"><input data-key="archive-snapshot" type="checkbox" checked /> Archive a snapshot for
+          quick actions
+          <span class="hint">(shortcut, automatic direct archive, and prompt default; Html + metadata)</span>
+        </label>
+        <label class="chk"><input data-key="save-assets" type="checkbox" /> Save assets for quick actions
           <span class="hint">Related assets (js, css, etc.) downloaded by server</span>
         </label>
         <label class="chk"><input data-key="include-screenshot" type="checkbox" checked /> Include
@@ -73,6 +76,10 @@
         <legend>Toolbar &amp; pending list</legend>
         <label class="chk"><input data-key="auto-check" type="checkbox" /> Check archive status automatically when
           a page loads</label>
+        <label class="chk"><input data-key="prompt-pending-on-load" type="checkbox" checked /> Offer direct
+          archive when a loaded page is already in the pending queue
+          <span class="hint">(shows an in-page prompt)</span>
+        </label>
         <label>Refresh pending list every (minutes, 0 = never)
           <input data-key="pending-refresh-minutes" type="number" min="0" max="1440" /></label>
         <label>Max pending items to keep

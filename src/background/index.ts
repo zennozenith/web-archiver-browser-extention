@@ -3,17 +3,16 @@ import browser from "webextension-polyfill";
 import { ok, Result, err, wrapErr } from "@common/error";
 import {
   archiveWithFeedback,
-  clearPendingArchiveId,
   deleteHeaderMemory,
   handleOpened,
   openAndArchive,
   patchHeaders,
-  takePendingArchiveId,
+  promptPendingItem,
   testPageStatus,
 } from "./archive";
 import { getPendingFromStorage, refreshPending, testPending, updatePendingTags } from "./pending";
 import { bgRootlog as log, receiveForwardedLogsInBackground } from "@common/log";
-import { session_storage_delete, session_storage_get } from "@common/storage";
+import { session_storage_delete, session_storage_get, session_storage_set } from "@common/storage";
 import { canonicalizeUrl, isArchivable } from "@common/index";
 import { Message, MessageData, MessagePayload, MessageType } from "@common/messaging";
 import {
@@ -67,9 +66,18 @@ browser.tabs.onUpdated.addListener(async (tabId, change, tab) => {
 
   if (!loaded || tab.url === undefined || !isArchivable(tab.url)) return;
   logWebReq.debug("Page load complete", { tabId, url: tab.url });
+
+  let opened = false;
   if (change.status === "complete" && (await session_storage_get(`open:${tabId}`))) {
+    opened = true;
+    // The direct-archive flow owns this navigation; suppress the generic
+    // pending-on-load prompt for the same tab and URL.
+    await session_storage_set(`pendingPrompt:${tabId}`, canonicalizeUrl(tab.url));
     void handleOpened(tabId);
   }
+
+  // The open-and-archive flow above already owns this tab's banner.
+  if (!opened) void promptPendingItem(tabId, tab.url);
 
   const { serverUrl, autoCheck } = await getExtensionSettings();
   const [_, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
@@ -98,10 +106,15 @@ browser.tabs.onRemoved.addListener(async (tabId) => {
 
   logWebReq.debug("Tab removed", { tabId });
   deleteHeaderMemory(tabId);
-  const keys = [`hdr:${tabId}`, `statusKey:${tabId}`, `archiveError:${tabId}`, `open:${tabId}`];
+  const keys = [
+    `hdr:${tabId}`,
+    `statusKey:${tabId}`,
+    `archiveError:${tabId}`,
+    `open:${tabId}`,
+    `pendingPrompt:${tabId}`,
+  ];
   if (statusKey) keys.push(statusKey);
   session_storage_delete(...keys).catch(() => {});
-  await clearPendingArchiveId(tabId).catch(() => {});
 });
 
 browser.commands.onCommand.addListener(async (cmd) => {
@@ -109,7 +122,12 @@ browser.commands.onCommand.addListener(async (cmd) => {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
   if (tab) {
     log.info("Keyboard shortcut received", { command: cmd, tabId: tab.id });
-    void archiveWithFeedback(tab.id as number, { toast: true });
+    const { archiveSnapshotWhenShortcut, saveAssetsWhenShortcut } = await getExtensionSettings();
+    void archiveWithFeedback(tab.id as number, {
+      toast: true,
+      archiveSnapshot: archiveSnapshotWhenShortcut,
+      saveAssets: saveAssetsWhenShortcut,
+    });
   }
 });
 
@@ -291,10 +309,15 @@ registerHandlers({
 
   SAVE_LINK: (payload) => saveLink(payload),
 
-  ARCHIVE_TAB: async ({ tabId, tags }) => {
+  ARCHIVE_TAB: async ({ tabId, tags, archiveSnapshot, saveAssets }) => {
     // `tags` is optional: when given, they are merged into the page after the
     // snapshot succeeds.
-    return await archiveWithFeedback(tabId, { toast: false, tags });
+    return await archiveWithFeedback(tabId, {
+      toast: false,
+      tags,
+      archiveSnapshot,
+      saveAssets,
+    });
   },
 
   SET_PENDING_TAGS: async ({ id, tags }) => {
@@ -314,7 +337,7 @@ registerHandlers({
       });
     }
   },
-  ARCHIVE_FROM_PAGE: async ({ tags }, sender) => {
+  ARCHIVE_FROM_PAGE: async ({ tags, archiveSnapshot, saveAssets, pendingId }, sender) => {
     if (sender.tab?.id === undefined) {
       return err({
         logger: log,
@@ -323,8 +346,12 @@ registerHandlers({
       });
     }
 
-    // Present only when this tab was opened from the pending queue.
-    const pendingId = await takePendingArchiveId(sender.tab.id);
-    return await archiveWithFeedback(sender.tab.id, { toast: false, tags, pendingId });
+    return await archiveWithFeedback(sender.tab.id, {
+      toast: false,
+      tags,
+      pendingId,
+      archiveSnapshot,
+      saveAssets,
+    });
   },
 });

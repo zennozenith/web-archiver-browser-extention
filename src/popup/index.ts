@@ -21,6 +21,8 @@ const SPINNER_DELAY_MS = 300;
 
 /** Remembers the "Also archive a snapshot" checkbox between popup opens. */
 const ARCHIVE_PREF_KEY = "archiveOnSave";
+/** Remembers the "Also save assets" checkbox between popup opens. */
+const SAVE_ASSETS_PREF_KEY = "saveAssetsOnSave";
 /** One-shot message shown after the popup reloads itself following a save. */
 const FLASH_KEY = "popup-flash";
 
@@ -124,6 +126,19 @@ function writeArchivePref(value: boolean) {
   void browser.storage.local.set({ [ARCHIVE_PREF_KEY]: value }).catch(() => {});
 }
 
+async function readSaveAssetPref(): Promise<boolean> {
+  try {
+    const stored = await browser.storage.local.get(SAVE_ASSETS_PREF_KEY);
+    return stored[SAVE_ASSETS_PREF_KEY] !== false; // default on
+  } catch {
+    return false;
+  }
+}
+
+function writeSaveAssetPref(value: boolean) {
+  void browser.storage.local.set({ [SAVE_ASSETS_PREF_KEY]: value }).catch(() => {});
+}
+
 // ---------------------------------------------------------------------------
 // Loading spinner (only shown if loading takes longer than SPINNER_DELAY_MS)
 // ---------------------------------------------------------------------------
@@ -223,6 +238,9 @@ class LinkForm {
   private archiveOption = getElementById("archive-option", HTMLLabelElement);
   private archiveCheck = getElementById("archive-with-save", HTMLInputElement);
 
+  private saveAssetsOption = getElementById("save-assets-option", HTMLLabelElement);
+  private saveAssetsCheck = getElementById("save-assets-with-archive", HTMLInputElement);
+
   private errorEl = getElementById("current-error-container", HTMLDivElement);
   private flash = getElementById("current-flash", HTMLDivElement);
 
@@ -251,6 +269,7 @@ class LinkForm {
     readonly state: LookupState,
     shortcut: string,
     archiveDefault: boolean,
+    saveAssetDefault: boolean,
   ) {
     this.page = state.kind === "saved" ? state.page : null;
     this.url = this.page?.url ?? tab.url ?? "";
@@ -273,6 +292,7 @@ class LinkForm {
     this.notes.value = this.page?.description ?? "";
     if (this.page) this.tagStore.tags = this.page.tags;
     this.archiveCheck.checked = archiveDefault;
+    this.saveAssetsCheck.checked = saveAssetDefault;
     this.archiveBtnShortcut.textContent = shortcut;
 
     this.renderPin();
@@ -309,7 +329,13 @@ class LinkForm {
       }
     });
 
-    this.archiveCheck.addEventListener("change", () => writeArchivePref(this.archiveCheck.checked));
+    this.archiveCheck.addEventListener("change", () => {
+      writeArchivePref(this.archiveCheck.checked);
+      this.updateAssetsVisibility();
+    });
+    this.saveAssetsCheck.addEventListener("change", () =>
+      writeSaveAssetPref(this.saveAssetsCheck.checked),
+    );
 
     this.saveBtn.addEventListener("click", () => void this.save());
     this.archiveBtn.addEventListener("click", () => void this.archiveVersion());
@@ -459,6 +485,7 @@ class LinkForm {
       pinned: draft.pinned,
       tags: draft.tags,
       archive: this.archiveCheck.checked,
+      saveAssets: this.archiveCheck.checked && this.saveAssetsCheck.checked,
     });
 
     if (error) return this.fail(`Couldn't save link: ${error.detail}`);
@@ -508,6 +535,7 @@ class LinkForm {
         // kept without risking a tag rewrite when archiving fails. Only send
         // them when they actually changed to avoid a pointless extra request.
         tags: this.tagsChanged(draft) ? draft.tags : undefined,
+        saveAssets: this.saveAssetsCheck.checked,
       });
       if (error) return this.fail(`Couldn't archive: ${error.detail}`);
       this.reloadWithFlash("Archived ✓", archive.warnings);
@@ -561,6 +589,7 @@ class LinkForm {
       this.tagInput,
       this.tagAddBtn,
       this.archiveCheck,
+      this.saveAssetsCheck,
       this.archiveBtn,
     ]) {
       el.disabled = busy;
@@ -593,6 +622,14 @@ class LinkForm {
     show(this.archiveBtn, saved);
     this.archiveBtnText.textContent =
       saved && this.page!.captureCount === 0 ? "Archive a snapshot" : "Archive new version";
+    this.updateAssetsVisibility();
+  }
+
+  /** Assets only matter when the save/archive action will take a snapshot. */
+  private updateAssetsVisibility() {
+    const saved = this.page !== null;
+    show(this.saveAssetsOption, saved || this.archiveCheck.checked);
+    this.saveAssetsCheck.disabled = this.busy;
   }
 
   private renderPin() {
@@ -951,13 +988,19 @@ async function init() {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
   log.debug("Popup opened", { tabId: tab?.id, url: tab?.url, title: tab?.title });
 
-  const [hasPermission, shortcut, archiveDefault, [storageSettings, settingsError]] =
-    await Promise.all([
-      hasAllUrlsPermission(),
-      getArchiveShortcut(),
-      readArchivePref(),
-      sendToBackground("GET_EXTENSION_SETTINGS"),
-    ]);
+  const [
+    hasPermission,
+    shortcut,
+    archiveDefault,
+    saveAssetsDefault,
+    [storageSettings, settingsError],
+  ] = await Promise.all([
+    hasAllUrlsPermission(),
+    getArchiveShortcut(),
+    readArchivePref(),
+    readSaveAssetPref(),
+    sendToBackground("GET_EXTENSION_SETTINGS"),
+  ]);
 
   if (settingsError) {
     ErrorUi.push("Cannot load extension settings,", settingsError.detail);
@@ -989,7 +1032,7 @@ async function init() {
 
   const state = toLookupState(lookupResult);
 
-  const form = new LinkForm(tab.id, tab, state, shortcut, archiveDefault);
+  const form = new LinkForm(tab.id, tab, state, shortcut, archiveDefault, saveAssetsDefault);
   new Snapshots(state);
   new Pending(pendingResult);
 

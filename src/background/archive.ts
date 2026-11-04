@@ -7,7 +7,11 @@ import { reqwest, TestEndpointResponse } from "./reqwest";
 import type { ArchiveResponse, PageDetail, PageItem } from "@common/api-types";
 import type { IdLessTag, Int, Int64, Vec } from "@common/types";
 import { session_storage_delete, session_storage_get, session_storage_set } from "@common/storage";
-import { errorIfServerUnconfigured, getExtensionSettings } from "@common/settings";
+import {
+  errorIfServerUnconfigured,
+  getExtensionSettings,
+  isServerConfigured,
+} from "@common/settings";
 import { canonicalizeUrl, createUrl, extractTabUrl, sha256 } from "@common/index";
 import { Screenshot, takeScreenshot } from "./screenshot";
 import { injectBanner } from "./browser-scripting";
@@ -15,6 +19,7 @@ import { updateBadge } from "./badge";
 import { collectPage, type Page } from "./content-scripts";
 import { createPage, pageLookup } from "./page";
 import { setRemotePageTag } from "./tags";
+import { getPendingFromStorage, getPendingItem, removePending } from "./pending";
 
 const log = bgRootlog.child("archive");
 const logCapture = bgRootlog.child("capture");
@@ -32,7 +37,8 @@ export interface HeadersDetails {
 }
 
 export interface ArchiveResult {
-  response: ArchiveResponse;
+  /** Null when the quick action saved the link without taking a snapshot. */
+  response: ArchiveResponse | null;
   warnings: string[];
 }
 
@@ -99,7 +105,7 @@ export function patchHeaders(tabId: Int, requestId: string, patch: Partial<Heade
 export async function archivePage(
   tabId: Int,
   pageId: Int64,
-  { pendingId }: { pendingId?: Int64 } = {},
+  { saveAssets, pendingId }: { pendingId?: Int64; saveAssets?: boolean } = {},
 ): Promise<Result<ArchiveResult>> {
   const {
     serverUrl,
@@ -112,7 +118,6 @@ export async function archivePage(
     includeResponseHeaders,
     includeRequestHeaders,
     requestTimeoutSec,
-    saveAssets,
   } = await getExtensionSettings();
   const [, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
   if (serverUnconfigured !== null) return wrapErr(serverUnconfigured);
@@ -241,7 +246,7 @@ export async function archivePage(
     const form = new FormData();
     form.append("html", htmlBlob);
     form.append("metadata", JSON.stringify(metadata));
-    form.append("saveAssets", saveAssets ? "true" : "false");
+    form.append("saveAssets", saveAssets === true ? "true" : "false");
     if (title.trim()) form.append("title", title);
     if (pendingId !== undefined) form.append("pendingId", String(pendingId));
     if (maybeScreenshot !== null) {
@@ -319,14 +324,62 @@ async function resolvePageForArchive(
 
 export type ArchiveTab = Awaited<ReturnType<typeof archiveWithFeedback>>;
 
+export interface ArchiveOptions {
+  tags?: readonly IdLessTag[];
+  pendingId?: Int64;
+  /** False saves the link without capturing Html/metadata. */
+  archiveSnapshot?: boolean;
+  saveAssets?: boolean;
+}
+
+/** Merge queued/explicit tags and drop the pending row when no capture runs. */
+async function finishWithoutSnapshot(
+  resolved: ResolvedPage,
+  { tags, pendingId }: ArchiveOptions,
+): Promise<ArchiveResult> {
+  const warnings: string[] = [];
+  const extraTags: IdLessTag[] = [...(tags ?? [])];
+
+  if (pendingId !== undefined) {
+    const [pending, pendingError] = await getPendingItem(pendingId);
+    if (pendingError) {
+      warnings.push(`Could not read the queue item: ${pendingError.detail}`);
+    } else {
+      extraTags.push(...pending.tags);
+    }
+  }
+
+  if (extraTags.length > 0) {
+    const merged = mergeTags(resolved.page.tags, extraTags);
+    const [, tagError] = await setRemotePageTag(resolved.page.id, merged);
+    if (tagError) {
+      warnings.push(`Link saved, but tags could not be updated: ${tagError.detail}`);
+    }
+  }
+
+  if (pendingId !== undefined) {
+    const [, removeError] = await removePending(pendingId);
+    if (removeError) {
+      warnings.push(`Link saved, but the queue item could not be removed: ${removeError.detail}`);
+    }
+  }
+
+  return { response: null, warnings };
+}
+
 async function archiveTab(
   tabId: Int,
-  { tags, pendingId }: { tags?: readonly IdLessTag[]; pendingId?: Int64 } = {},
+  { tags, pendingId, archiveSnapshot = true, saveAssets = false }: ArchiveOptions = {},
 ) {
   const [resolved, resolveError] = await resolvePageForArchive(tabId, { tags });
   if (resolveError) return wrapErr(resolveError);
 
-  const [result, archiveError] = await archivePage(tabId, resolved.page.id, { pendingId });
+  if (!archiveSnapshot) return ok(await finishWithoutSnapshot(resolved, { tags, pendingId }));
+
+  const [result, archiveError] = await archivePage(tabId, resolved.page.id, {
+    pendingId,
+    saveAssets,
+  });
   if (archiveError) return wrapErr(archiveError);
 
   // Tags chosen for an already-saved page are merged after the capture, so an
@@ -368,18 +421,37 @@ async function reportArchiveFailure(
 
 export async function archiveWithFeedback(
   tabId: Int,
-  { toast, tags, pendingId }: { toast: boolean; tags?: Vec<IdLessTag>; pendingId?: Int64 },
+  {
+    toast,
+    tags,
+    pendingId,
+    archiveSnapshot,
+    saveAssets,
+  }: {
+    toast: boolean;
+    tags?: Vec<IdLessTag>;
+    pendingId?: Int64;
+    archiveSnapshot?: boolean;
+    saveAssets?: boolean;
+  },
 ) {
   try {
-    const [res, error] = await archiveTab(tabId, { tags, pendingId });
+    const [res, error] = await archiveTab(tabId, {
+      tags,
+      pendingId,
+      archiveSnapshot,
+      saveAssets,
+    });
     if (error !== null) {
       await reportArchiveFailure(tabId, error.detail, { toast });
       return wrapErr(error);
     }
 
     if (toast) {
-      const n = res.response.version;
-      const text = `Archived ✓${n ? ` (${n} version${n === 1 ? "" : "s"})` : ""}`;
+      const n = res.response?.version ?? 0;
+      const text = res.response
+        ? `Archived ✓${n ? ` (${n} version${n === 1 ? "" : "s"})` : ""}`
+        : "Link saved ✓";
       log.info(text);
       await injectBanner(tabId, { mode: "toast", kind: "ok", text });
     }
@@ -413,20 +485,6 @@ export async function openAndArchive(
   });
 }
 
-/** Pending id parked by `handleOpened` for the banner's archive action. */
-const pendingArchiveKey = (tabId: Int) => `archivePending:${tabId}`;
-
-export async function takePendingArchiveId(tabId: Int): Promise<Int64 | undefined> {
-  const key = pendingArchiveKey(tabId);
-  const pendingId = await session_storage_get(key);
-  await session_storage_delete(key);
-  return typeof pendingId === "number" ? pendingId : undefined;
-}
-
-export function clearPendingArchiveId(tabId: Int): Promise<void> {
-  return session_storage_delete(pendingArchiveKey(tabId));
-}
-
 export async function handleOpened(tabId: Int) {
   const opened = (await session_storage_get(`open:${tabId}`)) as {
     url: string;
@@ -436,8 +494,15 @@ export async function handleOpened(tabId: Int) {
   } | null;
   await session_storage_delete(`open:${tabId}`);
 
-  const { serverUrl, directArchiveMode, directArchiveDelaySec, defaultTags, token } =
-    await getExtensionSettings();
+  const {
+    serverUrl,
+    directArchiveMode,
+    directArchiveDelaySec,
+    defaultTags,
+    token,
+    archiveSnapshotWhenShortcut,
+    saveAssetsWhenShortcut,
+  } = await getExtensionSettings();
   const [, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
   if (serverUnconfigured !== null) return wrapErr(serverUnconfigured);
 
@@ -450,14 +515,10 @@ export async function handleOpened(tabId: Int) {
       toast: true,
       tags: opened?.tags ?? undefined,
       pendingId: opened?.pendingId,
+      archiveSnapshot: archiveSnapshotWhenShortcut,
+      saveAssets: saveAssetsWhenShortcut,
     });
   } else {
-    // The banner sends a separate message when the user confirms; keep the
-    // pending id around so that archive also dequeues the item.
-    if (opened?.pendingId !== undefined) {
-      await session_storage_set(pendingArchiveKey(tabId), opened.pendingId);
-    }
-
     const defaults = mergeTags(defaultTags, opened?.tags ?? []);
 
     const [urlToLookUp, error] = await extractTabUrl(tabId, log);
@@ -471,8 +532,45 @@ export async function handleOpened(tabId: Int) {
       mode: "prompt",
       text: "Archive this page?",
       tags: mergeTags(siteTags, defaults),
+      pendingId: opened?.pendingId,
+      archiveSnapshot: archiveSnapshotWhenShortcut,
+      saveAssets: saveAssetsWhenShortcut,
     });
   }
+}
+
+/**
+ * Offer a direct archive when a freshly loaded page is already in the pending
+ * queue. Only prompts once per tab and URL.
+ */
+export async function promptPendingItem(tabId: Int, rawUrl: string) {
+  const { serverUrl, promptPendingOnLoad, archiveSnapshotWhenShortcut, saveAssetsWhenShortcut } =
+    await getExtensionSettings();
+  if (!promptPendingOnLoad || !isServerConfigured({ serverUrl })) return;
+
+  const [pending, pendingError] = await getPendingFromStorage();
+  if (pendingError) return;
+
+  const url = canonicalizeUrl(rawUrl);
+  const item = pending.items.find((candidate) => canonicalizeUrl(candidate.url) === url);
+  if (!item) return;
+
+  // Load events can fire more than once for the same navigation.
+  const promptedKey = `pendingPrompt:${tabId}`;
+  if ((await session_storage_get(promptedKey)) === url) return;
+  await session_storage_set(promptedKey, url);
+
+  const tagCount = item.tags.length;
+  const queued = tagCount ? ` with ${tagCount} queued tag${tagCount === 1 ? "" : "s"}` : "";
+  await injectBanner(tabId, {
+    kind: "",
+    mode: "prompt",
+    text: `This page is in the archive queue${queued}. Archive it now?`,
+    tags: item.tags,
+    pendingId: item.id,
+    archiveSnapshot: archiveSnapshotWhenShortcut,
+    saveAssets: saveAssetsWhenShortcut,
+  });
 }
 
 export async function testPageStatus(

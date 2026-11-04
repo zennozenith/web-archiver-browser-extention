@@ -172,6 +172,54 @@ export async function updatePendingTags(id: Int64, tags: readonly IdLessTag[]) {
   return ok(pending.tags ?? []);
 }
 
+/** `GET /api/pending/:id` — one queued item, including its tags. */
+export async function getPendingItem(id: Int64) {
+  const { serverUrl, token } = await getExtensionSettings();
+  const [, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
+  if (serverUnconfigured !== null) return wrapErr(serverUnconfigured);
+
+  const [pending, error] = await reqwest<PendingItem>(createUrl(serverUrl, `/api/pending/${id}`), {
+    token,
+    timeoutMs: 20000,
+  });
+  if (error) return wrapErr(error);
+  return ok(pending);
+}
+
+/** `DELETE /api/pending/:id` — remove a queued item and update the cached list. */
+export async function removePending(id: Int64) {
+  const { serverUrl, token } = await getExtensionSettings();
+  const [, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
+  if (serverUnconfigured !== null) return wrapErr(serverUnconfigured);
+
+  const [, error] = await reqwest<null>(createUrl(serverUrl, `/api/pending/${id}`), {
+    method: "DELETE",
+    token,
+    timeoutMs: 20000,
+  });
+  if (error) return wrapErr(error);
+
+  try {
+    const { pending } = (await browser.storage.local.get({ pending: null })) as {
+      pending: PendingInStorage | null;
+    };
+    if (pending) {
+      const items = pending.items.filter((item) => item.id !== id);
+      await browser.storage.local.set({
+        pending: {
+          ...pending,
+          items,
+          total: Math.max(0, pending.total - (pending.items.length - items.length)),
+        },
+      });
+    }
+  } catch (e) {
+    log.warn("Cannot update cached pending list", e);
+  }
+
+  return ok(true);
+}
+
 /** GET /api/pending — used for the endpoint test. */
 export async function testPending(serverUrl: URL, token?: string) {
   const [raw, error] = await reqwest<unknown>(createUrl(serverUrl, "/api/pending"), {

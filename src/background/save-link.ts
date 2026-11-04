@@ -20,6 +20,8 @@ export interface SaveLinkPayload {
   tags: IdLessTag[];
   /** Also capture a snapshot right after the link is created. */
   archive: boolean;
+  /** Also save all assets of the snapshot. */
+  saveAssets: boolean;
 }
 
 export interface SaveLinkResult {
@@ -62,7 +64,9 @@ export async function saveLink({ tabId, ...input }: SaveLinkPayload) {
   let archived = false;
 
   if (input.archive) {
-    const [snapshot, archiveError] = await archivePage(tabId, page.id);
+    const [snapshot, archiveError] = await archivePage(tabId, page.id, {
+      saveAssets: input.saveAssets,
+    });
     if (archiveError) {
       warnings.push(`The link was saved, but the snapshot failed: ${archiveError.detail}`);
     } else {

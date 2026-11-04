@@ -1,6 +1,6 @@
 import type { SendToBackground } from "@common/messaging";
 import type { IdLessTag } from "../tags";
-import type { Option, Vec } from "@common/types";
+import type { Int64, Option, Vec } from "@common/types";
 
 export interface BannerOpts {
   kind: "ok" | "err" | (string & {});
@@ -8,6 +8,12 @@ export interface BannerOpts {
   mode: "prompt" | "toast" | (string & {});
   /* optional (prompt mode): tag names offered as a chip row before confirming */
   tags?: Vec<IdLessTag>;
+  /* optional (prompt mode): default for the "Archive snapshot" checkbox */
+  archiveSnapshot?: boolean;
+  /* optional (prompt mode): default for the "Save assets" checkbox */
+  saveAssets?: boolean;
+  /* optional (prompt mode): pending queue row to dequeue after archiving */
+  pendingId?: Int64;
 }
 
 export interface Page {
@@ -87,7 +93,7 @@ export function pageBanner(opts: BannerOpts) {
   const root = host.attachShadow({ mode: "closed" });
   const style = document.createElement("style");
   style.textContent =
-    ".b{font:14px/1.4 system-ui,sans-serif;color:#fff;background:#1f2937;border-radius:10px;padding:12px 14px;box-shadow:0 6px 24px rgba(0,0,0,.35);max-width:340px;display:flex;flex-direction:column;gap:10px;word-break:break-word}.b.ok{background:#15803d}.b.err{background:#b91c1c}.r{display:flex;gap:8px;justify-content:flex-end}button{font:inherit;border:0;border-radius:6px;padding:5px 12px;cursor:pointer;background:#fff;color:#111}button.p{background:#3b82f6;color:#fff}.c{display:flex;flex-wrap:wrap;gap:6px}.c button{border-radius:999px;font-size:12px;padding:3px 10px;opacity:.45}.c button.on{opacity:1;outline:1px solid #fff}";
+    ".b{font:14px/1.4 system-ui,sans-serif;color:#fff;background:#1f2937;border-radius:10px;padding:12px 14px;box-shadow:0 6px 24px rgba(0,0,0,.35);max-width:340px;display:flex;flex-direction:column;gap:10px;word-break:break-word}.b.ok{background:#15803d}.b.err{background:#b91c1c}.r{display:flex;gap:8px;justify-content:flex-end}button{font:inherit;border:0;border-radius:6px;padding:5px 12px;cursor:pointer;background:#fff;color:#111}button.p{background:#3b82f6;color:#fff}.c{display:flex;flex-wrap:wrap;gap:6px}.c button{border-radius:999px;font-size:12px;padding:3px 10px;opacity:.45}.c button.on{opacity:1;outline:1px solid #fff}.o{display:flex;flex-direction:column;gap:4px;font-size:12px}.o label{display:flex;align-items:center;gap:6px;cursor:pointer}.o input{accent-color:#3b82f6}.o input:disabled+span{opacity:.5}";
   const box = document.createElement("div");
   root.append(style, box);
 
@@ -122,6 +128,8 @@ export function pageBanner(opts: BannerOpts) {
   /* Tags chosen in the prompt chip row (top-of-list = to be attached). */
   const chipTags = opts.mode === "prompt" ? (opts.tags ?? []) : [];
   const chosen = new Set(chipTags);
+  let archiveSnapshot = opts.archiveSnapshot !== false;
+  let saveAssets = opts.saveAssets === true;
 
   const archive = async () => {
     render("", "Archiving…", []);
@@ -129,15 +137,21 @@ export function pageBanner(opts: BannerOpts) {
     const [data, error] = (await api.runtime.sendMessage({
       type: "ARCHIVE_FROM_PAGE",
       // explicitly selected tags; pending-queue tags merge in the background
-      payload: { tags: [...chosen] },
+      payload: {
+        tags: [...chosen],
+        archiveSnapshot,
+        saveAssets: archiveSnapshot && saveAssets,
+        pendingId: opts.pendingId,
+      },
     })) as SendToBackground<"ARCHIVE_FROM_PAGE">;
 
     if (data !== null) {
-      const count = data.response.version;
+      const count = data.response?.version ?? 0;
+      const text = data.response
+        ? "Archived ✓" + (count ? ` (${count} version${count === 1 ? "" : "s"})` : "")
+        : "Link saved ✓";
 
-      render("ok", "Archived ✓" + (count ? ` (${count} version${count === 1 ? "" : "s"})` : ""), [
-        ["Close", close],
-      ]);
+      render("ok", text, [["Close", close]]);
 
       timer = setTimeout(close, 5000);
     } else {
@@ -169,11 +183,44 @@ export function pageBanner(opts: BannerOpts) {
     box.insertBefore(row, box.querySelector(".r"));
     return row;
   };
+  const renderOptions = () => {
+    const wrap = document.createElement("div");
+    wrap.className = "o";
+
+    const option = (labelText: string, checked: boolean) => {
+      const label = document.createElement("label");
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.checked = checked;
+      const span = document.createElement("span");
+      span.textContent = labelText;
+      label.append(input, span);
+      wrap.append(label);
+      return input;
+    };
+
+    const snapshot = option("Archive snapshot", archiveSnapshot);
+    const assets = option("Save assets", saveAssets);
+    assets.disabled = !archiveSnapshot;
+
+    snapshot.onchange = () => {
+      archiveSnapshot = snapshot.checked;
+      assets.disabled = !archiveSnapshot;
+    };
+    assets.onchange = () => {
+      saveAssets = assets.checked;
+    };
+
+    // between the text and the action buttons
+    box.insertBefore(wrap, box.querySelector(".r"));
+  };
+
   if (opts.mode === "prompt") {
     render("", opts.text || "Archive this page?", [
       ["Dismiss", close],
       ["Archive now", archive, true],
     ]);
+    renderOptions();
     renderChips();
   } else {
     render(opts.kind, opts.text, [["Close", close]]);

@@ -1,5 +1,3 @@
-// toaster.ts
-
 export type ToastType = "success" | "error" | "warning" | "info";
 
 export interface ToastOptions {
