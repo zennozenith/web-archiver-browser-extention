@@ -1,135 +1,164 @@
 # Web Archiver
 
-A browser extension (Manifest V3) that archives web pages to **your own archive server**. For any given URL it can capture the HTML, a full-page screenshot, request/response headers, and page metadata — everything is sent to a server you control, so nothing depends on a third-party archive service.
+A browser extension (Manifest V3) that archives web pages to **your own archive server**. For any URL it can capture the HTML, a screenshot, request/response headers, and page metadata — everything is sent to a server you control, so nothing depends on a third-party archive service.
 
-Built with TypeScript, Vite+ (`vp`), and [`@crxjs/vite-plugin`](https://crxjs.dev). Chrome and Firefox are supported from a single codebase via a `TARGET` build flag.
+Works in **Firefox** and **Chrome** from a single TypeScript codebase.
+
+## Install
+
+| Browser     | Where to get it                                                                                  |
+| ----------- | ------------------------------------------------------------------------------------------------ |
+| **Firefox** | [Install from Firefox Add-ons](https://addons.mozilla.org/en-US/firefox/addon/web-archiver/)     |
+| **Chrome**  | [Download from GitHub Releases](https://github.com/zennozenith/web-archiver-browser-extention/releases/tag/v0.2.2) — Chrome is not published to the Chrome Web Store |
+
+### Installing the Chrome build
+
+Chrome builds are distributed only through GitHub Releases:
+
+1. Download `web-archiver-chrome.zip` from the [v0.2.2 release](https://github.com/zennozenith/web-archiver-browser-extention/releases/tag/v0.2.2).
+2. Unzip it to a permanent folder.
+3. Open `chrome://extensions`, enable **Developer mode**, and click **Load unpacked**.
+4. Select the unzipped folder.
+
+### You also need a server
+
+The extension is a client. It talks to a companion server that stores links, snapshots, tags, collections, and the pending queue:
+
+> **[zennozenith/web-archiver-server](https://github.com/zennozenith/web-archiver-server)**
+
+Set the server URL (and an optional API token) in the extension's preferences after installing.
 
 ## Features
 
-- **Archive pages** — captures HTML, a screenshot, HTTP headers, and metadata, then sends it to your own server.
-  - Toolbar button, keyboard shortcut (`Alt+Shift+A`), or right from the page.
-- **Archive status-check** — checks whether the current page is already archived and shows existing versions in the popup badge/pill. Each version links straight to its archived HTML. Optionally runs automatically on page load (`autoCheck`).
-- **Tags** — add site-wide tags from the popup; tags are shared across all versions of a URL and merged server-side.
-- **Pending queue** — a periodic (configurable alarm-based) background refresh keeps a list of pending archives, and items can be re-tagged from the popup before archiving.
-- **Open and archive** — archive a URL without visiting it first.
-- **Connection test** — the options page checks `/api/health`, `/api/stats`, `/api/pending`, and `/api/page/lookup` against the configured server.
-- **Badge feedback** — a small toast/notification with success/error feedback on archiving.
-- **Native-feeling integration** — respects the browser API differences between Chrome (Blink / service worker) and Firefox (Gecko / background scripts, `captureTab`).
+- **Archive a page** — captures the full HTML, a screenshot, request/response headers, and metadata (title, description, canonical URL, favicon, meta tags, viewport, language, …).
+- **Multiple snapshots per URL** — every archive is stored as a new version; the popup lists previous versions and links to their archived HTML.
+- **Save links without archiving** — save a page with a title, notes, collection, pin state, and tags, optionally archiving a snapshot in the same step.
+- **Tags & collections** — add tags from the popup (with colors and autocomplete), file links into collections, and set default tags for manual archives.
+- **Pending queue** — the server can hold URLs to archive later. The popup shows the queue, lets you edit tags, and can open a queued URL and archive it in one go.
+- **Archive status check** — automatically checks whether the current page is already archived and shows the result on the toolbar badge and in the popup.
+- **Screenshot options** — PNG or JPEG, configurable quality, optional full-page capture (Firefox; Chrome captures the visible area).
+- **Header capture** — records request and response headers, with sensitive headers (`Cookie`, `Authorization`, `Set-Cookie`, …) redacted by default.
+- **Asset saving** — optionally have the server download related assets (JS, CSS, images, …) for a snapshot.
+- **Keyboard shortcut** — archive the current page with `Alt+Shift+A` (configurable in the browser).
+- **Light / dark / system theme**, centralized logging, and a connection test in preferences.
 
-## Requirements
+## Quick start
 
-- [Bun](https://bun.sh) (runtime, package manager, and script runner)
-- [Vite+ CLI](https://viteplus.dev) (`vp`) — the unified build/lint/format/test toolchain
-- (Optional) [devenv](https://devenv.sh) for a hermetic dev shell — `devenv.nix` provides Bun, `librsvg`, `zip`, `oxfmt`, and defines helper scripts
+1. Install the extension for [Firefox](https://addons.mozilla.org/en-US/firefox/addon/web-archiver/) or [Chrome](https://github.com/zennozenith/web-archiver-browser-extention/releases/tag/v0.2.2).
+2. Run the [web-archiver-server](https://github.com/zennozenith/web-archiver-server) somewhere reachable.
+3. Open the extension's **Preferences** and set:
+   - **Server URL** — e.g. `https://archive.example.com/`
+   - **API auth token** — optional, sent as `Authorization: Bearer …`
+4. Click **Test connection**, grant site access when prompted, and save.
+5. Open any `http`/`https` page and archive it from the toolbar popup or with `Alt+Shift+A`.
 
-Manual dependencies for `./build.sh`: `jq`, `zip`, `rsvg-convert` (from `librsvg`).
+## How it works
 
-## Getting started
+The extension only needs the server's base URL; API paths are derived from it:
 
-```bash
-# install dependencies
-vp install        # or: bun install
+| Path                         | Purpose                                      |
+| ---------------------------- | -------------------------------------------- |
+| `POST /api/page`             | Create a link (or return an existing one)    |
+| `PATCH /api/page/:id`        | Update title, notes, collection, pin, …      |
+| `GET /api/page/lookup`       | Check whether a URL is already saved         |
+| `POST /api/page/:id/capture` | Upload a new snapshot (HTML, screenshot, …)  |
+| `GET /api/page/:id/capture`  | Snapshot history                             |
+| `PUT /api/page/:id/tag`      | Replace the tag set for a page               |
+| `GET /api/tag`               | List tags for autocomplete                   |
+| `GET /api/collection`        | List collections for the popup select        |
+| `GET \| POST /api/pending`   | List / add queued URLs                       |
+| `PATCH /api/pending/:id`     | Update tags on a queued URL                  |
+| `GET /api/health`            | Liveness check                               |
+| `GET /api/stats`             | Archive and deduplication statistics         |
 
-# dev mode (Chrome)
-bun run dev:chrome
-
-# dev mode (Firefox)
-bun run dev:firefox
-
-# local Firefox testing (web-ext run)
-bun run start:firefox
-```
-
-### Production build
-
-```bash
-bun run build
-```
-
-This type-checks, builds `dist/chrome` and `dist/firefox`, and packages `dist/web-archiver-chrome.zip` / `dist/web-archiver-firefox.zip`. The full pipeline (icon rendering from `assets/icon.svg`, both targets, zips) is available via the build script:
-
-```bash
-./build.sh            # dev build
-NODE_ENV=production ./build.sh
-```
-
-## Using the extension
-
-1. After install, the options page opens automatically — configure your archive server's endpoints and API token there.
-2. Grant site access when prompted (needed to read pages and capture headers).
-3. Open a page and archive it via the toolbar popup or `Alt+Shift+A`.
-
-### Endpoints
-
-The extension only needs your server's base URL; every API path is derived from it:
-
-| Path                         | Purpose                                    |
-| ---------------------------- | ------------------------------------------ |
-| `POST /api/page`             | Save a link (title, notes, tags, etc.)     |
-| `POST /api/page/:id/capture` | Archive a new snapshot of a saved link     |
-| `/api/page/lookup`           | Check whether a URL is already saved       |
-| `PUT /api/page/:id/tag`      | Replace the tag set for a site             |
-| `/api/collection`            | List collections for the popup select      |
-| `/api/pending`               | List/manage the server-side pending queue  |
-| `/api/tag`                   | List known tags for autocomplete           |
-| `/api/health`                | Connection test (liveness)                 |
-| `/api/stats`                 | Connection test (archive/dedup statistics) |
-
-Endpoint configuration and a connection test ("Test connection") live in the options page.
-
-## Architecture
+### Architecture
 
 ```
 src/
 ├── background/           # service worker (Chrome) / background script (Firefox)
-│   ├── index.ts          # event listeners, alarm scheduling, message handlers
-│   ├── archive.ts        # archiving flow + feedback, status checks, header patching
-│   ├── screenshot.ts     # full-page capture (tabs.captureTab / activeTab)
-│   ├── browser-scripting.ts
-│   ├── badge.ts          # badge/toast feedback
+│   ├── index.ts          # events, alarms, message handlers
+│   ├── archive.ts        # capture + upload flow, status checks, header memory
+│   ├── page.ts           # page/lookup/capture API calls
+│   ├── save-link.ts      # save a link, optionally archive immediately
 │   ├── pending.ts        # pending queue refresh + tag updates
-│   ├── tags.ts           # tag listing / site tag management
-│   └── content-scripts/
-├── popup/                # toolbar popup UI (current page, tags, pending list)
-├── options/              # options page (server + endpoint + behavior settings)
-├── common/               # shared utilities: settings, storage, messaging, logging,
-│                         #   error handling (Result type), event bus, time helpers
-└── (manifest.config.ts)  # MV3 manifest, per-target (chrome/firefox) variations
+│   ├── tags.ts           # tag listing and page tag management
+│   ├── collections.ts    # collection listing
+│   ├── screenshot.ts     # screenshot capture (per-browser differences)
+│   ├── reqwest.ts        # fetch wrapper (auth, timeouts, error handling)
+│   ├── badge.ts          # toolbar badge state
+│   ├── browser-scripting.ts
+│   └── content-scripts/  # injected page collector + in-page banner
+├── popup/                # toolbar popup: current page, snapshots, queue, tags
+├── options/              # preferences page
+├── common/               # settings, storage, messaging, logging, Result errors
+└── manifest.config.ts    # MV3 manifest (Chrome / Firefox variants)
 ```
 
 Key design points:
 
-- **Per-target builds** — `TARGET=chrome|firefox` swaps the manifest background definition and runtime details; Firefox targets get `browser_specific_settings.gecko` and minimum version gates.
-- **Typed messaging** — every popup/options message type has a handler registered in the background (`registerHandlers`), compile-checked so no message type can be forgotten.
-- **Header capture** — taps `webRequest` `onSendHeaders`/`onHeadersReceived` for main-frame requests (including `extraHeaders` on Blink) and records them per tab.
-- **Centralized logging** — `@common/log` child loggers per subsystem; popup/options entries are forwarded into the background console.
+- **Per-target builds** — `TARGET=chrome|firefox` swaps the manifest background definition and target-specific details.
+- **Typed messaging** — every popup/options message has a compile-checked handler in the background.
+- **Header capture** — `webRequest` listeners record main-frame request/response headers per tab.
+- **Centralized logging** — child loggers per subsystem; popup/options logs are forwarded to the background console.
+- **No third-party backend** — the extension talks only to the server you configure.
 
-Path aliases in `vite.config.ts`: `@src` → `src/`, `@common` → `src/common/`.
+Path aliases: `@src` → `src/`, `@common` → `src/common/`.
 
-## Scripts
+## Development
 
-| Command                                  | Description                                             |
-| ---------------------------------------- | ------------------------------------------------------- |
-| `bun run dev` / `dev:chrome`             | Dev server (HMR), Chrome target                         |
-| `bun run dev:firefox`                    | Dev server (HMR), Firefox target                        |
-| `bun run build`                          | Type-check + build + zip Chrome and Firefox             |
-| `bun run build:chrome` / `build:firefox` | Build a single target                                   |
-| `bun run typecheck`                      | `tsc --noEmit`                                          |
-| `bun run lint:firefox`                   | AMO linting of the Firefox build (`web-ext lint`)       |
-| `bun run start:firefox`                  | Launch Firefox with the built extension (`web-ext run`) |
+### Requirements
 
-Lint/format/typecheck in one shot: `vp check`.
+- [Bun](https://bun.sh) — runtime, package manager, and script runner
+- [Vite+](https://viteplus.dev) (`vp`) — build, lint, and formatting toolchain
+- For `./build.sh`: `jq`, `zip`, and `rsvg-convert` (from `librsvg`)
+- Optional: [devenv](https://devenv.sh) — `devenv.nix` provides the toolchain and helper scripts
+
+### Setup
+
+```bash
+vp install          # or: bun install
+bun run dev:chrome  # dev server + HMR, Chrome target
+bun run dev:firefox # dev server + HMR, Firefox target
+```
+
+### Build
+
+```bash
+bun run build       # type-check + build both targets
+./build.sh          # render icons, build dist/chrome and dist/firefox, create zips
+```
+
+Outputs:
+
+- `dist/chrome/`, `dist/firefox/` — unpacked builds
+- `dist/web-archiver-chrome.zip`, `dist/web-archiver-firefox.zip` — release archives
+
+### Scripts
+
+| Command                                  | Description                                        |
+| ---------------------------------------- | -------------------------------------------------- |
+| `bun run dev` / `dev:chrome`             | Dev server (HMR), Chrome target                    |
+| `bun run dev:firefox`                    | Dev server (HMR), Firefox target                   |
+| `bun run build`                          | Type-check and build both targets                  |
+| `bun run build:chrome` / `build:firefox` | Build a single target                              |
+| `bun run typecheck`                      | `tsc --noEmit`                                     |
+| `bun run lint:firefox`                   | AMO lint of the Firefox build (`web-ext lint`)     |
+| `bun run start:firefox`                  | Launch Firefox with the built extension            |
+| `vp check`                               | Format, lint, and type-check in one shot           |
 
 ## Permissions
 
-- `activeTab`, `scripting`, `tabs` — capture the current page (HTML, screenshot, metadata)
-- `webRequest` (+ `<all_urls>` host permission) — record request/response headers for archived pages, restricted to `main_frame` http/https requests
-- `storage`, `alarms` — settings, cached state, and the pending-refresh schedule
+- `activeTab`, `scripting`, `tabs` — read the current page (HTML, screenshot, metadata)
+- `webRequest` + `<all_urls>` — record request/response headers for archived pages
+- `storage`, `alarms` — settings, cached state, and periodic queue refresh
 
-## Related
+The extension only talks to the server URL you configure.
 
-- Requires a compatible archive server providing the endpoints listed above (a mock server is referenced via `devenv.nix` under `mock-server/`).
-- Example server: [zennozenith/web-archiver-example-server](https://github.com/zennozenith/web-archiver-example-server) — a ready-to-run reference implementation of the endpoints above.
+## Links
+
+- **Release:** [v0.2.2](https://github.com/zennozenith/web-archiver-browser-extention/releases/tag/v0.2.2)
+- **Firefox Add-on:** [Web Archiver on AMO](https://addons.mozilla.org/en-US/firefox/addon/web-archiver/)
+- **Companion server:** [zennozenith/web-archiver-server](https://github.com/zennozenith/web-archiver-server)
 
 ## License
 
