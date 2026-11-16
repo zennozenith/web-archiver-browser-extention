@@ -90,11 +90,11 @@ export async function createPage(input: CreatePageInput) {
 
   const form = new FormData();
   form.set("url", input.url);
-  form.set("displayTitle", input.displayTitle);
+  form.set("display_title", input.displayTitle);
   form.set("pinned", input.pinned ? "true" : "false");
 
   if (input.description) form.set("description", input.description);
-  if (input.collectionId) form.set("collectionId", input.collectionId);
+  if (input.collectionId) form.set("collection_id", input.collectionId);
   if (input.tags?.length) form.set("tags", input.tags.map((tag) => tag.name).join(","));
 
   const [page, error] = await reqwest<PageItem>(createUrl(serverUrl, "/api/page"), {
@@ -136,10 +136,10 @@ async function fetchPageAndVersions(url: string, cacheKey: string, ctx: ApiConte
   if (pageError) return wrapErr(pageError);
 
   let versions: CaptureHistoryResponse;
-  if (page.captureCount === 0) {
-    versions = { items: [], nextCursor: null };
-  } else if (page.captureCount === 1 && page.latestCapture) {
-    versions = { items: [page.latestCapture], nextCursor: null };
+  if (page.capture_count === 0) {
+    versions = { items: [], next_cursor: null };
+  } else if (page.capture_count === 1 && page.latest_capture) {
+    versions = { items: [page.latest_capture], next_cursor: null };
   } else {
     const [history, versionsError] = await pageVersions(page.id, ctx);
     if (versionsError) return wrapErr(versionsError);

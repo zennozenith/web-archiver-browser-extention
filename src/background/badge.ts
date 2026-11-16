@@ -26,8 +26,8 @@ export function applyStatusBadge(tabId: Int, lookupPageResult?: PageLookupFull):
   }
 
   const [lookupPage, _] = page;
-  const n = lookupPage.captureCount;
-  const when = lookupPage.lastCapturedAt;
+  const n = lookupPage.capture_count;
+  const when = lookupPage.last_captured_at;
   const tagNames = lookupPage.tags.map((v) => v.name);
 
   return updateBadge({

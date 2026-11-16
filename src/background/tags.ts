@@ -1,7 +1,7 @@
 import { ok, wrapErr } from "@common/error";
 import { log as rootLog } from "@common/log";
 import { reqwest } from "./reqwest";
-import type { ReplaceTagsRequest, Tag, TagSummary } from "@common/api-types";
+import type { ReplaceTagsRequest, Tag, TagListResponse } from "@common/api-types";
 import type { IdLessTag, Int64 } from "@common/types";
 import { errorIfServerUnconfigured, getExtensionSettings } from "@common/settings";
 import { sync_storage_get, sync_storage_set } from "@common/storage";
@@ -85,13 +85,13 @@ export async function listTags({ timeoutMs = 20000 }: { timeoutMs?: number } = {
   const [, serverUnconfigured] = errorIfServerUnconfigured({ serverUrl }, log);
   if (serverUnconfigured !== null) return wrapErr(serverUnconfigured);
 
-  const [tags, error] = await reqwest<TagSummary[]>(createUrl(serverUrl, "/api/tag"), {
+  const [response, error] = await reqwest<TagListResponse>(createUrl(serverUrl, "/api/tag"), {
     token,
     timeoutMs,
   });
   if (error) return wrapErr(error);
 
-  return ok(tags.filter((tag) => tag.name.length > 0));
+  return ok(response.tags.filter((tag) => tag.name.length > 0));
 }
 
 export type SetPageTag =
@@ -109,7 +109,7 @@ export async function setRemotePageTag(
   if (serverUnconfigured !== null) return wrapErr(serverUnconfigured);
 
   const body: ReplaceTagsRequest = {
-    tags: new TagStore(tags).tags.map(({ name, color }) => ({ name, color })),
+    tags: new TagStore(tags).tags.map(({ name }) => ({ name })),
   };
 
   const [saved, error] = await reqwest<Tag[]>(createUrl(serverUrl, `/api/page/${pageId}/tag`), {

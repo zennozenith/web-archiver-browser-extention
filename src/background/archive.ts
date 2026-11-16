@@ -246,9 +246,9 @@ export async function archivePage(
     const form = new FormData();
     form.append("html", htmlBlob);
     form.append("metadata", JSON.stringify(metadata));
-    form.append("saveAssets", saveAssets === true ? "true" : "false");
+    form.append("save_assets", saveAssets === true ? "true" : "false");
     if (title.trim()) form.append("title", title);
-    if (pendingId !== undefined) form.append("pendingId", String(pendingId));
+    if (pendingId !== undefined) form.append("pending_id", String(pendingId));
     if (maybeScreenshot !== null) {
       form.append("screenshot", maybeScreenshot.blob, `screenshot.${maybeScreenshot.ext}`);
     }
@@ -598,6 +598,6 @@ export async function testPageStatus(
   }
   return {
     ok: true,
-    text: `page check ✓ [for "${queryUrl}" ${response.captureCount} capture(s)]`,
+    text: `page check ✓ [for "${queryUrl}" ${response.capture_count} capture(s)]`,
   };
 }

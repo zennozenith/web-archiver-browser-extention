@@ -1,22 +1,24 @@
 /**
  * Wire types for the JSON API mounted at `/api`.
  *
- * Source of truth: `src/api/*.rs`, `src/db/*.rs`, `src/tag.rs`, `src/error.rs`.
+ * Source of truth: `src/transport/api/*.rs`, `src/db/*.rs`, `src/domain/*.rs`,
+ * `src/transport/dto/*.rs`, and `src/error.rs`.
  *
  * Conventions:
- * - Ids are JSON numbers, timestamps are Unix seconds.
- * - JSON keys are camelCase throughout (every serde struct uses `rename_all`).
- *   Enum values keep their explicit spellings (e.g. `PendingStatus` uses
- *   `"in_progress"`).
+ * - Ids are JSON numbers; archive timestamps are Unix seconds.
+ * - Account, session, API-key and audit timestamps are RFC 3339 strings.
+ * - JSON keys are snake_case throughout.
  * - Multipart field names are literal strings read by the handlers, so
- *   `POST /api/page` and `POST /api/page/:id/capture` uses camelCase
- *   (`displayTitle`, `collectionId`, `pendingId`, `saveAssets`).
+ *   `POST /api/page` and `POST /api/page/:id/capture` use snake_case
+ *   (`display_title`, `collection_id`, `pending_id`, `save_assets`).
  * - Multipart/query booleans accept `true`/`false`, `1`/`0`, `yes`/`no`,
  *   `on`/`off`.
  * - Every endpoint may instead return `ApiErrorBody` with a non-2xx status.
  *
  * Current implementation notes:
+ * - `GET /api/tag` wraps its list in `{ "tags": ... }`.
  * - `GET /api/page/:id/capture` returns a cursor page of capture summaries.
+ * - `GET /api/page` ignores the cursor for `sort=name`.
  */
 
 // ── Primitives ──────────────────────────────────────────────────────────────
@@ -26,6 +28,9 @@ export type Id = number;
 
 /** Unix epoch seconds. */
 export type Timestamp = number;
+
+/** RFC 3339 timestamp used by account/admin DTOs. */
+export type DateTime = string;
 
 /** Lowercase, 64-character hex-encoded BLAKE3 hash. */
 export type HexHash = string;
@@ -60,18 +65,23 @@ export interface ApiErrorBody {
   };
 }
 
+/** Successful no-content-style responses that still carry a JSON body. */
+export interface OkResponse {
+  ok: boolean;
+}
+
 // ── Pagination ──────────────────────────────────────────────────────────────
 
 /** Cursors are opaque decimal strings on the wire. */
 export type Cursor = string;
 
-/** Page cursors are serialized as `"<captured_at>:<id>"`. */
+/** Page cursors are serialized as `"<created_at>:<id>"`. */
 export type PageCursor = string;
 
 export interface CursorPage<T, C = Cursor> {
   items: T[];
   /** `null` on the last page. */
-  nextCursor: C | null;
+  next_cursor: C | null;
 }
 
 // ── Tags ────────────────────────────────────────────────────────────────────
@@ -80,12 +90,17 @@ export interface Tag {
   id: Id;
   name: string;
   color: TagColor | null;
-  createdAt: Timestamp;
+  created_at: Timestamp;
 }
 
 export interface TagSummary extends Tag {
-  pageCount: number;
-  pendingCount: number;
+  page_count: number;
+  pending_count: number;
+}
+
+/** Body of `GET /api/tag`. */
+export interface TagListResponse {
+  tags: TagSummary[];
 }
 
 export interface CreateTagRequest {
@@ -108,23 +123,26 @@ export interface MergeTagRequest {
 
 export interface CollectionRecord {
   id: Id;
+  owner_user_id: Id;
   name: string;
   emoji: string;
   description: string;
   color: string;
-  parentId: Id | null;
   public: boolean;
+  is_builtin: boolean;
+  created_at: Timestamp;
   /** Pages filed directly under this collection. */
-  linkCount: number;
+  link_count: number;
 }
 
 export interface CollectionCreateRequest {
   name: string;
+  emoji?: string | null;
   description?: string | null;
-  /** Numeric id as a string; invalid/empty values become `null`. */
-  parentId?: string | null;
   /** CSS color, default `#6d5dfc`. */
   color?: string | null;
+  /** Accepted for wire compatibility; collections are flat, so this is ignored. */
+  parent_id?: string | null;
 }
 
 /** Same body is accepted by both POST and PUT on `/collection/:id`. */
@@ -143,8 +161,8 @@ export interface PendingRecord {
   url: string;
   status: PendingStatus;
   attempts: number;
-  lastError: string | null;
-  createdAt: Timestamp;
+  last_error: string | null;
+  created_at: Timestamp;
 }
 
 export interface PendingItem extends PendingRecord {
@@ -164,6 +182,8 @@ export interface PatchPendingRequest {
   tags?: TagNamesInput;
   /** `in_progress` is rejected; use `POST /api/pending/claim` instead. */
   status?: PendingStatus;
+  /** Replaces the queued URL. */
+  url?: string;
 }
 
 export interface FailPendingRequest {
@@ -220,19 +240,19 @@ export interface PageRecord {
   url: string;
   host: string;
   /** `0` when the page has no captures. */
-  lastCapturedAt: Timestamp;
-  captureCount: number;
+  last_captured_at: Timestamp;
+  capture_count: number;
   /** User title, else latest capture title, else the URL. */
-  displayTitle: string;
+  display_title: string;
   description: string;
-  collectionId: Id | null;
-  collectionName: string | null;
-  collectionEmoji: string | null;
+  collection_id: Id | null;
+  collection_name: string | null;
+  collection_emoji: string | null;
   pinned: boolean;
-  thumbnailContentId: Id | null;
-  createdAt: Timestamp;
-  hasHtml: boolean;
-  hasScreenshot: boolean;
+  thumbnail_content_id: Id | null;
+  created_at: Timestamp;
+  has_html: boolean;
+  has_screenshot: boolean;
 }
 
 export interface PageItem extends PageRecord {
@@ -240,16 +260,17 @@ export interface PageItem extends PageRecord {
 }
 
 export interface PageDetail extends PageItem {
-  latestCapture: CaptureSummary | null;
+  latest_capture: CaptureSummary | null;
 }
 
 export interface ListPagesQuery {
   text?: string;
   field?: PageField;
   sort?: PageSort;
-  pinnedOnly?: boolean;
-  collectionId?: Id;
-  tagId?: Id;
+  pinned_only?: boolean;
+  collection_id?: Id;
+  unorganized_only?: boolean;
+  tag_id?: Id;
   /** 1..=1000 (default 50). */
   limit?: number;
   cursor?: PageCursor;
@@ -261,15 +282,15 @@ export interface LookupPageQuery {
 
 /**
  * Multipart fields for `POST /api/page`. These are literal multipart field
- * names (`displayTitle` is required); `tags` is comma-separated, not a JSON
+ * names (`display_title` is required); `tags` is comma-separated, not a JSON
  * array.
  */
 export interface CreatePageRequest {
   url: string;
-  displayTitle: string;
+  display_title: string;
   description?: string;
   /** Numeric id as a string; invalid/empty values become `null`. */
-  collectionId?: string;
+  collection_id?: string;
   pinned?: MultipartBoolean;
   /** Comma-separated tag names. */
   tags?: string;
@@ -278,13 +299,13 @@ export interface CreatePageRequest {
 
 /**
  * Body for `PATCH /api/page/:id`.
- * Absent field = unchanged; `null` is the shared "clear" variant; `tags` is
- * comma-separated. (The handler currently leaves tags unchanged on `null`.)
+ * Absent field = unchanged; `null` clears the field. (`tags: null` is accepted
+ * but currently leaves the tag set unchanged.)
  */
 export interface PatchPageRequest {
-  displayTitle?: string | null;
+  display_title?: string | null;
   description?: string | null;
-  collectionId?: string | null;
+  collection_id?: string | null;
   pinned?: boolean | null;
   tags?: string | null;
 }
@@ -293,8 +314,12 @@ export interface AddPageTagRequest {
   name: string;
 }
 
+export interface PageTagName {
+  name: string;
+}
+
 export interface ReplaceTagsRequest {
-  tags: CreateTagRequest[];
+  tags: PageTagName[];
 }
 
 // ── Captures / archive ──────────────────────────────────────────────────────
@@ -303,11 +328,11 @@ export interface CaptureSummary {
   id: Id;
   /** 1 = oldest; recomputed on every list. */
   version: number;
-  capturedAt: Timestamp;
+  captured_at: Timestamp;
   title: string | null;
-  statusCode: number | null;
-  contentHash: HexHash | null;
-  hasScreenshot: boolean;
+  status_code: number | null;
+  content_hash: HexHash | null;
+  has_screenshot: boolean;
 }
 
 /** Query for the page's capture history. Cursor is the last seen version. */
@@ -322,30 +347,30 @@ export type CaptureHistoryResponse = CursorPage<CaptureSummary>;
 
 export interface BlobSummary {
   hash: HexHash;
-  sizeOriginal: number;
-  sizeStored: number;
-  mimeType: MimeType;
+  size_original: number;
+  size_stored: number;
+  mime_type: MimeType;
 }
 
 export interface CaptureDetailResponse {
   id: Id;
-  pageId: Id;
+  page_id: Id;
   url: string;
   version: number;
-  capturedAt: Timestamp;
+  captured_at: Timestamp;
   title: string | null;
-  statusCode: number | null;
-  contentType: string | null;
-  originalEncoding: string | null;
-  redirectUrl: string | null;
+  status_code: number | null;
+  content_type: string | null;
+  original_encoding: string | null;
+  redirect_url: string | null;
   error: string | null;
-  requestHeaders: JsonValue | null;
-  responseHeaders: JsonValue | null;
+  request_headers: JsonValue | null;
+  response_headers: JsonValue | null;
   metadata: JsonValue | null;
   html: BlobSummary | null;
-  originalHtml: BlobSummary | null;
+  original_html: BlobSummary | null;
   screenshot: BlobSummary | null;
-  assetCount: number;
+  asset_count: number;
 }
 
 export type AssetKind =
@@ -360,14 +385,14 @@ export type AssetKind =
   | "other";
 
 export interface CaptureAsset {
-  contentId: Id;
+  content_id: Id;
   url: string;
   kind: AssetKind;
-  statusCode: number | null;
+  status_code: number | null;
   hash: HexHash;
-  mimeType: MimeType;
-  sizeOriginal: number;
-  sizeStored: number;
+  mime_type: MimeType;
+  size_original: number;
+  size_stored: number;
 }
 
 /**
@@ -384,16 +409,16 @@ export interface ArchiveCaptureRequest {
   metadata?: string | { [key: string]: JsonValue };
   title?: string;
   /** Dequeues the matching pending item after a successful archive. */
-  pendingId?: Id;
-  /** Defaults to `false`.*/
-  saveAssets?: MultipartBoolean;
+  pending_id?: Id;
+  /** Defaults to `false`. */
+  save_assets?: MultipartBoolean;
 }
 
 export interface ArchiveDeduplication {
   /** The served (rewritten) HTML blob already existed. */
   html: boolean;
   /** The exact uploaded HTML blob already existed. */
-  originalHtml: boolean;
+  original_html: boolean;
   /** `null` when no screenshot was uploaded. */
   screenshot: boolean | null;
 }
@@ -406,8 +431,8 @@ export interface AssetSummary {
 }
 
 export interface ArchiveResponse {
-  captureId: Id;
-  pageId: Id;
+  capture_id: Id;
+  page_id: Id;
   version: number;
   deduplicated: ArchiveDeduplication;
   assets: AssetSummary;
@@ -422,17 +447,17 @@ export interface HealthResponse {
 export interface Stats {
   pages: number;
   captures: number;
-  contentItems: number;
+  content_items: number;
   assets: number;
   tags: number;
   pendings: number;
   /** Bytes actually on disk (compressed, deduplicated). */
-  storedBytes: number;
+  stored_bytes: number;
   /** Uncompressed size of unique content. */
-  uniqueOriginalBytes: number;
+  unique_original_bytes: number;
   /** Size without deduplication or compression. */
-  logicalBytes: number;
-  savedBytes: number;
+  logical_bytes: number;
+  saved_bytes: number;
   queue: {
     queued: number;
     in_progress: number;
@@ -442,9 +467,182 @@ export interface Stats {
 }
 
 export interface GCStat {
-  rowsDeleted: number;
-  filesDeleted: number;
-  tmpRemoved: number;
+  rows_deleted: number;
+  files_deleted: number;
+  tmp_removed: number;
+}
+
+// ── Auth ────────────────────────────────────────────────────────────────────
+
+export type AccountStatus = "pending" | "active" | "suspended" | "deactivated";
+
+export interface RegisterRequest {
+  email: string;
+  username?: string | null;
+  password: string;
+  display_name?: string | null;
+}
+
+export interface RegisterResponse {
+  message: string;
+}
+
+export interface TokenRequest {
+  token: string;
+}
+
+export interface LoginRequest {
+  /** E-mail or username. */
+  identifier: string;
+  password: string;
+}
+
+export interface ForgotPasswordRequest {
+  email: string;
+}
+
+export interface ForgotPasswordResponse {
+  ok: boolean;
+  message: string;
+}
+
+export interface ResetPasswordRequest {
+  token: string;
+  new_password: string;
+}
+
+// ── Account (me) ────────────────────────────────────────────────────────────
+
+export interface UserDto {
+  public_id: string;
+  email: string | null;
+  email_verified_at: DateTime | null;
+  username: string | null;
+  phone_e164: string | null;
+  status: AccountStatus;
+  last_login_at: DateTime | null;
+  created_at: DateTime;
+  display_name: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  avatar_url: string | null;
+  locale: string | null;
+  timezone: string | null;
+  roles: string[];
+}
+
+export interface ProfileDto {
+  display_name: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  avatar_url: string | null;
+  bio: string | null;
+  birth_date: string | null;
+  locale: string;
+  timezone: string;
+  updated_at: DateTime;
+}
+
+export interface MeResponse {
+  user: UserDto;
+  profile: ProfileDto;
+}
+
+export interface UpdateProfileRequest {
+  display_name?: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+  bio?: string | null;
+  /** `YYYY-MM-DD`. */
+  birth_date?: string | null;
+  locale?: string | null;
+  timezone?: string | null;
+}
+
+export interface SessionDto {
+  public_id: string;
+  ip_address: string | null;
+  user_agent: string | null;
+  created_at: DateTime;
+  last_used_at: DateTime | null;
+  expires_at: DateTime;
+  current: boolean;
+}
+
+export interface ListSessionsResponse {
+  sessions: SessionDto[];
+}
+
+export interface ApiKeyDto {
+  public_id: string;
+  name: string;
+  key_prefix: string;
+  scopes: string[];
+  created_at: DateTime;
+  last_used_at: DateTime | null;
+  expires_at: DateTime | null;
+}
+
+export interface ListApiKeysResponse {
+  api_keys: ApiKeyDto[];
+}
+
+export interface CreateApiKeyRequest {
+  name: string;
+  scopes: string[];
+  expires_in_days?: number;
+}
+
+/** The only response that ever contains the plaintext key. */
+export interface CreatedApiKeyDto {
+  public_id: string;
+  key: string;
+}
+
+// ── Admin ───────────────────────────────────────────────────────────────────
+
+export interface ListUsersQuery {
+  q?: string;
+  status?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ListUsersResponse {
+  users: UserDto[];
+}
+
+export interface UpdateUserStatusRequest {
+  status: AccountStatus;
+  reason?: string | null;
+}
+
+export interface RoleDto {
+  name: string;
+  description: string | null;
+  is_system: boolean;
+  permissions: string[];
+}
+
+export interface ListRolesResponse {
+  roles: RoleDto[];
+}
+
+export interface AuditQuery {
+  limit?: number;
+}
+
+export interface AuditDto {
+  id: Id;
+  action: string;
+  actor: string | null;
+  target: string | null;
+  details: JsonValue;
+  created_at: DateTime;
+}
+
+export interface ListAuditResponse {
+  entries: AuditDto[];
 }
 
 // ── Route map ───────────────────────────────────────────────────────────────
@@ -462,7 +660,30 @@ export interface ApiRoute<Req, Res> {
 export interface ApiRoutes {
   "GET /api/health": ApiRoute<void, HealthResponse>;
 
-  "GET /api/tag": ApiRoute<void, TagSummary[]>;
+  "POST /api/auth/register": ApiRoute<RegisterRequest, RegisterResponse>;
+  "POST /api/auth/verify": ApiRoute<TokenRequest, void>;
+  "POST /api/auth/login": ApiRoute<LoginRequest, void>;
+  "POST /api/auth/logout": ApiRoute<void, void>;
+  "POST /api/auth/forgot": ApiRoute<ForgotPasswordRequest, ForgotPasswordResponse>;
+  "POST /api/auth/reset": ApiRoute<ResetPasswordRequest, void>;
+
+  "GET /api/me": ApiRoute<void, MeResponse>;
+  "PUT /api/me/profile": ApiRoute<UpdateProfileRequest, OkResponse>;
+  "GET /api/me/sessions": ApiRoute<void, ListSessionsResponse>;
+  "DELETE /api/me/sessions/:public_id": ApiRoute<void, OkResponse>;
+  "GET /api/me/api-keys": ApiRoute<void, ListApiKeysResponse>;
+  "POST /api/me/api-keys": ApiRoute<CreateApiKeyRequest, CreatedApiKeyDto>;
+  "DELETE /api/me/api-keys/:public_id": ApiRoute<void, OkResponse>;
+
+  "GET /api/admin/users": ApiRoute<ListUsersQuery, ListUsersResponse>;
+  "DELETE /api/admin/users/:public_id": ApiRoute<void, OkResponse>;
+  "PATCH /api/admin/users/:public_id/status": ApiRoute<UpdateUserStatusRequest, OkResponse>;
+  "POST /api/admin/users/:public_id/roles/:role": ApiRoute<void, OkResponse>;
+  "DELETE /api/admin/users/:public_id/roles/:role": ApiRoute<void, OkResponse>;
+  "GET /api/admin/roles": ApiRoute<void, ListRolesResponse>;
+  "GET /api/admin/audit": ApiRoute<AuditQuery, ListAuditResponse>;
+
+  "GET /api/tag": ApiRoute<void, TagListResponse>;
   "POST /api/tag": ApiRoute<CreateTagRequest, Tag>;
   "PATCH /api/tag/:id": ApiRoute<PatchTagRequest, Tag>;
   "DELETE /api/tag/:id": ApiRoute<void, void>;
@@ -500,7 +721,7 @@ export interface ApiRoutes {
   "POST /api/page/:id/capture": ApiRoute<ArchiveCaptureRequest, ArchiveResponse>;
   "POST /api/page/:id/tag": ApiRoute<AddPageTagRequest, Tag>;
   "PUT /api/page/:id/tag": ApiRoute<ReplaceTagsRequest, Tag[]>;
-  "DELETE /api/page/:id/tag/:tagId": ApiRoute<void, void>;
+  "DELETE /api/page/:id/tag/:tag_id": ApiRoute<void, void>;
   /** `307` redirect to the latest capture's HTML. */
   "GET /api/page/:id/latest/html": ApiRoute<void, void>;
   /** `307` redirect to the latest capture's original HTML. */
@@ -515,7 +736,7 @@ export interface ApiRoutes {
   "GET /api/capture/:id/html/original": ApiRoute<void, RawResponse>;
   "GET /api/capture/:id/screenshot": ApiRoute<void, RawResponse>;
   "GET /api/capture/:id/asset": ApiRoute<void, CaptureAsset[]>;
-  "GET /api/capture/:id/asset/:contentId": ApiRoute<void, RawResponse>;
+  "GET /api/capture/:id/asset/:content_id": ApiRoute<void, RawResponse>;
 
   "GET /api/content/:hash": ApiRoute<void, RawResponse>;
   "HEAD /api/content/:hash": ApiRoute<void, void>;

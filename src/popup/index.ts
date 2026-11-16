@@ -275,7 +275,7 @@ class LinkForm {
     this.url = this.page?.url ?? tab.url ?? "";
     this.pinned = this.page?.pinned ?? false;
     this.initialCollectionId =
-      this.page?.collectionId != null ? String(this.page.collectionId) : null;
+      this.page?.collection_id != null ? String(this.page.collection_id) : null;
 
     const usable = state.kind !== "unavailable";
     show(this.unsupported, !usable);
@@ -287,7 +287,7 @@ class LinkForm {
 
     this.renderStatus(state);
 
-    this.titleInput.value = this.page?.displayTitle || tab.title || "";
+    this.titleInput.value = this.page?.display_title || tab.title || "";
     setTextWithTitle(this.urlEl, this.url || "No URL");
     this.notes.value = this.page?.description ?? "";
     if (this.page) this.tagStore.tags = this.page.tags;
@@ -395,7 +395,7 @@ class LinkForm {
     if (initial && !collections.some((collection) => String(collection.id) === initial)) {
       const fallback = document.createElement("option");
       fallback.value = initial;
-      fallback.textContent = [this.page?.collectionEmoji, this.page?.collectionName]
+      fallback.textContent = [this.page?.collection_emoji, this.page?.collection_name]
         .filter(Boolean)
         .join(" ");
       if (!fallback.textContent) fallback.textContent = "Current collection";
@@ -414,7 +414,7 @@ class LinkForm {
       log.warn("Cannot load tag suggestions,", error.detail);
       return;
     }
-    const byUsage = [...tags].sort((a, b) => b.pageCount - a.pageCount);
+    const byUsage = [...tags].sort((a, b) => b.page_count - a.page_count);
     this.known = new Map(byUsage.map((tag) => [tag.name, tag.color]));
     this.renderSuggestions();
   }
@@ -440,9 +440,9 @@ class LinkForm {
     const patch: PatchPageRequest = {};
     // The server keeps the current title when an empty one is sent, so treat an
     // empty title as "unchanged" instead of pretending it was saved.
-    if (draft.title && draft.title !== this.baseline.title) patch.displayTitle = draft.title;
+    if (draft.title && draft.title !== this.baseline.title) patch.display_title = draft.title;
     if (draft.description !== this.baseline.description) patch.description = draft.description;
-    if (draft.collectionId !== this.baseline.collectionId) patch.collectionId = draft.collectionId;
+    if (draft.collectionId !== this.baseline.collectionId) patch.collection_id = draft.collectionId;
     if (draft.pinned !== this.baseline.pinned) patch.pinned = draft.pinned;
     return patch;
   }
@@ -606,7 +606,7 @@ class LinkForm {
     show(this.recheck, state.kind !== "unavailable");
 
     if (state.kind === "saved") {
-      const count = state.page.captureCount;
+      const count = state.page.capture_count;
       this.statusPill.className = "pill ok";
       this.statusPill.textContent = count > 0 ? `Saved · ${plural(count, "snapshot")}` : "Saved";
     } else if (state.kind === "not_saved") {
@@ -621,7 +621,7 @@ class LinkForm {
     show(this.archiveOption, !saved);
     show(this.archiveBtn, saved);
     this.archiveBtnText.textContent =
-      saved && this.page!.captureCount === 0 ? "Archive a snapshot" : "Archive new version";
+      saved && this.page!.capture_count === 0 ? "Archive a snapshot" : "Archive new version";
     this.updateAssetsVisibility();
   }
 
@@ -719,14 +719,14 @@ class Snapshots {
   private itemTpl = getElementById("template-version", HTMLTemplateElement);
 
   constructor(state: LookupState) {
-    const visible = state.kind === "saved" && state.page.captureCount > 0;
+    const visible = state.kind === "saved" && state.page.capture_count > 0;
     show(this.root, visible);
     if (state.kind !== "saved" || !visible) return;
 
     const { page, versions } = state;
-    this.summary.textContent = `Snapshots (${page.captureCount})`;
+    this.summary.textContent = `Snapshots (${page.capture_count})`;
 
-    const lastCapturedAt = page.lastCapturedAt;
+    const lastCapturedAt = page.last_captured_at;
     show(this.lastArchived, lastCapturedAt > 0);
     if (lastCapturedAt > 0) {
       this.lastArchived.textContent = `Last archived ${formatTimeFromSec(lastCapturedAt)} (${timeAgoFromSec(lastCapturedAt)})`;
@@ -734,10 +734,10 @@ class Snapshots {
 
     // The API returns captures newest-first.
     const shown = versions.items.slice(0, MAX_VERSIONS_SHOWN);
-    const hasMore = page.captureCount > shown.length;
+    const hasMore = page.capture_count > shown.length;
     show(this.overflow, hasMore);
     if (hasMore) {
-      this.overflow.textContent = `Showing newest ${shown.length} of ${page.captureCount}`;
+      this.overflow.textContent = `Showing newest ${shown.length} of ${page.capture_count}`;
     }
 
     const fragment = document.createDocumentFragment();
@@ -766,12 +766,12 @@ class Snapshots {
       link.setAttribute("aria-disabled", "true");
     }
 
-    const iso = toDateFromSec(capture.capturedAt).toISOString();
-    timeEl.textContent = formatTimeFromSec(capture.capturedAt);
+    const iso = toDateFromSec(capture.captured_at).toISOString();
+    timeEl.textContent = formatTimeFromSec(capture.captured_at);
     timeEl.title = iso;
     timeEl.dateTime = iso;
 
-    agoEl.textContent = timeAgoFromSec(capture.capturedAt);
+    agoEl.textContent = timeAgoFromSec(capture.captured_at);
     agoEl.title = iso;
 
     return item;
@@ -866,7 +866,7 @@ class Pending {
     // Queue items have no title yet; show host + path instead.
     setTextWithTitle(titleEl, displayUrl(item.url));
     urlEl.title = item.url;
-    urlEl.textContent = `Queued ${timeAgoFromSec(item.createdAt)}`;
+    urlEl.textContent = `Queued ${timeAgoFromSec(item.created_at)}`;
 
     const renderTags = () => {
       const tagNames = item.tags.map((tag) => tag.name);
